@@ -1,10 +1,12 @@
 import json
 import base64
 import os
+import time
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel
+from typing import Literal
+from pydantic import BaseModel, Field
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from google.cloud import firestore
 from uvicorn.middleware.proxy_headers import ProxyHeadersMiddleware
@@ -22,6 +24,19 @@ class EncryptedRequest(BaseModel):
     user_id: str
     iv_b64: str
     ciphertext_b64: str
+
+# --- Strict Validation Models for Decrypted Data ---
+class StatusPayload(BaseModel):
+    # Ensure student number is strictly numeric
+    student_number: str = Field(pattern=r'^\d+$')
+    timestamp: int
+
+class CheckInPayload(BaseModel):
+    student_number: str = Field(pattern=r'^\d+$')
+    # Restrict location to alphanumeric, spaces, and basic punctuation, max 20 chars
+    location: str = Field(max_length=20, pattern=r'^[\w\s\-\.,]*$') 
+    attendance_mode: Literal["in-person", "virtual"]
+    timestamp: int
 
 def decrypt_payload(req: EncryptedRequest) -> dict:
     user_ref = db.collection("users").document(req.user_id)
@@ -42,11 +57,23 @@ def decrypt_payload(req: EncryptedRequest) -> dict:
     except Exception:
         raise HTTPException(status_code=400, detail="Decryption failed. Invalid PSK or corrupted payload.")
 
+def validate_timestamp(timestamp_ms: int):
+    client_time = timestamp_ms / 1000.0
+    if abs(time.time() - client_time) > 60:
+        raise HTTPException(status_code=400, detail="Request expired.")
+
 # --- API Endpoints ---
 @app.post("/api/is_checked_in")
 def is_checked_in(req: EncryptedRequest):
-    payload = decrypt_payload(req)
-    student_number = payload.get("student_number")
+    raw_payload = decrypt_payload(req)
+    
+    try:
+        payload = StatusPayload(**raw_payload)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=f"Validation failed: {e}")
+        
+    validate_timestamp(payload.timestamp)
+    student_number = payload.student_number
     
     student_doc = db.collection("students").document(student_number).get()
     
@@ -82,15 +109,25 @@ def atomic_check_in_transaction(transaction, student_ref, location, student_numb
 
 @app.post("/api/check_in")
 def check_in(req: EncryptedRequest):
-    payload = decrypt_payload(req)
-    student_number = payload.get("student_number")
-    location = payload.get("location")
+    raw_payload = decrypt_payload(req)
+    
+    try:
+        payload = CheckInPayload(**raw_payload)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=f"Validation failed: {e}")
+        
+    validate_timestamp(payload.timestamp)
     
     transaction = db.transaction()
-    student_ref = db.collection("students").document(student_number)
+    student_ref = db.collection("students").document(payload.student_number)
     
-    result = atomic_check_in_transaction(transaction, student_ref, location, student_number)
-    return result
+    return atomic_check_in_transaction(
+        transaction, 
+        student_ref, 
+        payload.location, 
+        payload.attendance_mode, 
+        payload.student_number
+    )
 
 # --- Serve Static Web App ---
 os.makedirs("static", exist_ok=True)
