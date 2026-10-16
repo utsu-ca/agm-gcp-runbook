@@ -1,83 +1,105 @@
-#!/bin/bash
-set -e  # Exit immediately if a command fails
+#!/usr/bin/env bash
+# One-shot deploy: clone this repo in Google Cloud Shell, run ./deploy.sh, answer the prompts.
+# Safe to re-run. Any answer can be pre-set via environment variable to skip its prompt:
+#   DOMAIN_NAME, ALLOWED_DOMAIN, GOOGLE_CLIENT_ID, ALLOWED_IP, SPREADSHEET_ID
+set -euo pipefail
+trap 'echo "ERROR: deploy failed at line $LINENO: $BASH_COMMAND" >&2' ERR
 
-# Trapper to capture exact script line and error message on failure
-trap 'echo "❌ ERROR: Deployment script failed at line $LINENO while running command: $BASH_COMMAND"' ERR
-
-# --- CONFIGURATION ---
-PROJECT_ID=$(gcloud config get-value project)
-REGION="us-central1"
+REGION="${REGION:-us-central1}"
 SERVICE_NAME="student-checkin-api"
-ALLOWED_IP="${ALLOWED_IP:-}"  # Your office IP or CIDR block, e.g. ALLOWED_IP=198.51.100.7/32 ./deploy.sh
-if [ -z "$ALLOWED_IP" ]; then
-    echo "ERROR: set ALLOWED_IP (CIDR) before running." >&2
-    exit 1
-fi
-
-echo "Deploying to project: $PROJECT_ID in $REGION"
-read -p "Enter your custom domain or subdomain (e.g., checkin.example.com): " DOMAIN_NAME
-
-# NEW PROMPT: Ask for the Spreadsheet ID
-echo ""
-echo "Google Sheets Integration (Optional)"
-echo "If you want a live dashboard, create a Google Sheet and share it with:"
-echo "checkin-api-sa@${PROJECT_ID}.iam.gserviceaccount.com"
-read -p "Enter your Google Spreadsheet ID (leave blank to skip): " SPREADSHEET_ID
-
-# NOTE: seed students once, separately, with: python seed.py
-echo ""
-# Google does not offer an API/gcloud command to create the OAuth client used by
-# Google Sign-In, so this step is guided: exact values are printed, you paste the result.
-if [ -z "${GOOGLE_CLIENT_ID:-}" ]; then
-    echo ""
-    echo "======== One-time OAuth client setup (about 1 minute) ========"
-    echo "1. Consent screen (set User type = Internal so only your org can sign in):"
-    echo "   https://console.cloud.google.com/auth/overview?project=${PROJECT_ID}"
-    echo "2. Create client: https://console.cloud.google.com/auth/clients/create?project=${PROJECT_ID}"
-    echo "   - Application type:           Web application"
-    echo "   - Authorized JavaScript origins: https://${DOMAIN_NAME}"
-    echo "   - Authorized redirect URIs:      (leave empty)"
-    echo "3. Copy the Client ID (ends in .apps.googleusercontent.com)."
-    echo "   Tip: re-run with GOOGLE_CLIENT_ID=<id> ./deploy.sh to skip this prompt."
-    echo "==============================================================="
-    read -p "Enter OAuth client ID: " GOOGLE_CLIENT_ID
-fi
-if [[ ! "$GOOGLE_CLIENT_ID" =~ ^[0-9A-Za-z._-]+\.apps\.googleusercontent\.com$ ]]; then
-    echo "ERROR: invalid OAuth client ID format." >&2
-    exit 1
-fi
-read -p "Enter your Workspace domain (e.g. example.com): " ALLOWED_DOMAIN
-if [ -z "$GOOGLE_CLIENT_ID" ] || [ -z "$ALLOWED_DOMAIN" ]; then
-    echo "ERROR: client ID and domain are required." >&2
-    exit 1
-fi
-
-# 1. Enable GCP Services
-echo "--> Enabling GCP APIs..."
-gcloud services enable run.googleapis.com compute.googleapis.com firestore.googleapis.com iam.googleapis.com sheets.googleapis.com
-
-# 2. Setup Least Privilege Service Account
-echo "--> Setting up service account..."
 SA_NAME="checkin-api-sa"
-SA_EMAIL="${SA_NAME}@${PROJECT_ID}.iam.gserviceaccount.com"
+POLICY="checkin-ip-allowlist"
 
-if ! gcloud iam service-accounts describe $SA_EMAIL >/dev/null 2>&1; then
-    echo "Creating service account $SA_NAME..."
-    gcloud iam service-accounts create $SA_NAME --display-name="Student Checkin API SA"
-else
-    echo "Service account $SA_NAME already exists."
+# --- Prompt helpers ---------------------------------------------------------
+# ask VAR "Question" REGEX "Error hint" [default]  -> keeps asking until the answer matches REGEX
+ask() {
+    local var="$1" question="$2" regex="$3" hint="$4" default="${5:-}" answer
+    answer="${!var:-}"
+    while :; do
+        if [ -z "$answer" ]; then
+            read -r -p "$question${default:+ [$default]}: " answer
+            answer="${answer:-$default}"
+        fi
+        if [[ "$answer" =~ $regex ]]; then break; fi
+        echo "  Invalid: $hint" >&2
+        answer=""
+    done
+    printf -v "$var" '%s' "$answer"
+}
+
+# gcloud describe-or-create helper: exists <describe command...>
+exists() { "$@" >/dev/null 2>&1; }
+
+# --- Preflight --------------------------------------------------------------
+command -v gcloud >/dev/null || { echo "ERROR: gcloud CLI not found (use Google Cloud Shell)." >&2; exit 1; }
+PROJECT_ID="$(gcloud config get-value project 2>/dev/null)"
+if [ -z "$PROJECT_ID" ] || [ "$PROJECT_ID" = "(unset)" ]; then
+    echo "ERROR: no project selected. Run: gcloud config set project <PROJECT_ID>" >&2
+    exit 1
+fi
+SA_EMAIL="${SA_NAME}@${PROJECT_ID}.iam.gserviceaccount.com"
+echo "Deploying to project: $PROJECT_ID in $REGION"
+echo ""
+
+# --- Questions --------------------------------------------------------------
+HOST_RE='^([a-z0-9]([a-z0-9-]*[a-z0-9])?\.)+[a-z]{2,}$'
+ask DOMAIN_NAME    "Website address people will visit (e.g. checkin.example.com)" "$HOST_RE" "enter a hostname like checkin.example.com"
+ask ALLOWED_DOMAIN "Google Workspace domain allowed to sign in" "$HOST_RE" "enter a domain like example.com" "utsu.ca"
+ask ALLOWED_IP     "Office IP or CIDR allowed to connect (e.g. 198.51.100.7/32; find yours at https://ifconfig.me)" \
+    '^([0-9]{1,3}\.){3}[0-9]{1,3}(/[0-9]{1,2})?$' "enter an IPv4 address or CIDR"
+case "$ALLOWED_IP" in */*) ;; *) ALLOWED_IP="$ALLOWED_IP/32" ;; esac
+
+if [ -z "${GOOGLE_CLIENT_ID:-}" ]; then
+    cat <<MSG
+
+======== One-time OAuth client setup (about 1 minute) ========
+1. Consent screen (set User type = Internal so only your org can sign in):
+   https://console.cloud.google.com/auth/overview?project=${PROJECT_ID}
+2. Create client: https://console.cloud.google.com/auth/clients/create?project=${PROJECT_ID}
+   - Application type:              Web application
+   - Authorized JavaScript origins: https://${DOMAIN_NAME}
+   - Authorized redirect URIs:      (leave empty)
+3. Copy the Client ID (ends in .apps.googleusercontent.com).
+===============================================================
+MSG
+fi
+ask GOOGLE_CLIENT_ID "OAuth client ID" '^[0-9A-Za-z._-]+\.apps\.googleusercontent\.com$' \
+    "must end in .apps.googleusercontent.com"
+
+echo ""
+echo "Optional live dashboard: create a Google Sheet and share it (Editor) with:"
+echo "  $SA_EMAIL"
+SPREADSHEET_ID="${SPREADSHEET_ID-}"
+if [ -z "$SPREADSHEET_ID" ]; then
+    read -r -p "Spreadsheet ID (leave blank to skip): " SPREADSHEET_ID
+fi
+if [ -n "$SPREADSHEET_ID" ] && [[ ! "$SPREADSHEET_ID" =~ ^[A-Za-z0-9_-]+$ ]]; then
+    echo "ERROR: Spreadsheet ID may only contain letters, digits, '-' and '_'." >&2
+    exit 1
 fi
 
-echo "Binding Firestore Data User permissions to service account..."
-gcloud projects add-iam-policy-binding $PROJECT_ID \
-    --member="serviceAccount:$SA_EMAIL" \
-    --role="roles/datastore.user" \
-    --condition=None \
-    --quiet
+# --- 1. APIs ----------------------------------------------------------------
+echo "--> Enabling GCP APIs..."
+gcloud services enable run.googleapis.com compute.googleapis.com firestore.googleapis.com \
+    iam.googleapis.com sheets.googleapis.com cloudbuild.googleapis.com artifactregistry.googleapis.com
 
-# 3. Deploy Cloud Run
-echo "--> Deploying Cloud Run service container..."
+# --- 2. Firestore database --------------------------------------------------
+if ! exists gcloud firestore databases describe --database="(default)"; then
+    echo "--> Creating Firestore database..."
+    gcloud firestore databases create --location="$REGION" --type=firestore-native
+fi
 
+# --- 3. Least-privilege service account -------------------------------------
+echo "--> Setting up service account..."
+if ! exists gcloud iam service-accounts describe "$SA_EMAIL"; then
+    gcloud iam service-accounts create "$SA_NAME" --display-name="Student Checkin API SA"
+fi
+gcloud projects add-iam-policy-binding "$PROJECT_ID" \
+    --member="serviceAccount:$SA_EMAIL" --role="roles/datastore.user" --condition=None --quiet >/dev/null
+
+# --- 4. Cloud Run -----------------------------------------------------------
+echo "--> Deploying Cloud Run service (this takes a few minutes)..."
+ENV_VARS="^|^GOOGLE_CLIENT_ID=$GOOGLE_CLIENT_ID|ALLOWED_DOMAIN=$ALLOWED_DOMAIN"
 DEPLOY_ARGS=(
     --source .
     --region="$REGION"
@@ -86,119 +108,85 @@ DEPLOY_ARGS=(
     --service-account="$SA_EMAIL"
     --quiet
 )
-ENV_VARS="^|^GOOGLE_CLIENT_ID=$GOOGLE_CLIENT_ID|ALLOWED_DOMAIN=$ALLOWED_DOMAIN"
 if [ -n "$SPREADSHEET_ID" ]; then
     ENV_VARS="$ENV_VARS|SPREADSHEET_ID=$SPREADSHEET_ID"
+    # The dashboard export runs inside the service every minute, so keep one instance running.
+    DEPLOY_ARGS+=(--min-instances=1 --max-instances=1 --no-cpu-throttling)
+else
+    DEPLOY_ARGS+=(--min-instances=0)
 fi
 DEPLOY_ARGS+=(--set-env-vars="$ENV_VARS")
-
 gcloud run deploy "$SERVICE_NAME" "${DEPLOY_ARGS[@]}"
 
-# 4. Create & Configure Cloud Armor Security Policy
-echo "Configuring Cloud Armor policy & WAF..."
-if ! gcloud compute security-policies describe checkin-ip-allowlist --global >/dev/null 2>&1; then
-    gcloud compute security-policies create checkin-ip-allowlist \
-        --description "WAF and IP Whitelist" --global
+# --- 5. Cloud Armor ---------------------------------------------------------
+echo "--> Configuring Cloud Armor policy & WAF..."
+if ! exists gcloud compute security-policies describe "$POLICY" --global; then
+    gcloud compute security-policies create "$POLICY" --description "WAF and IP allowlist" --global
 fi
+gcloud compute security-policies rules update 2147483647 --security-policy "$POLICY" --action "deny-403"
 
-# Set default rule to DENY ALL
-gcloud compute security-policies rules update 2147483647 \
-    --security-policy checkin-ip-allowlist \
-    --action "deny-403"
-
-ensure_waf_rule() {  # priority, description, expression
-    if ! gcloud compute security-policies rules describe "$1" --security-policy checkin-ip-allowlist >/dev/null 2>&1; then
-        gcloud compute security-policies rules create "$1" \
-            --security-policy checkin-ip-allowlist \
-            --description "$2" --expression "$3" --action "deny-403"
+ensure_rule() {  # priority, description, then the remaining rule flags
+    local priority="$1" description="$2"; shift 2
+    if exists gcloud compute security-policies rules describe "$priority" --security-policy "$POLICY"; then
+        gcloud compute security-policies rules update "$priority" --security-policy "$POLICY" "$@"
+    else
+        gcloud compute security-policies rules create "$priority" --security-policy "$POLICY" \
+            --description "$description" "$@"
     fi
 }
-ensure_waf_rule 900 "Block SQL Injection" "evaluatePreconfiguredWaf('sqli-v422-stable', {'sensitivity': 1})"
-ensure_waf_rule 901 "Block Cross-Site Scripting" "evaluatePreconfiguredWaf('xss-v422-stable', {'sensitivity': 1})"
-
-# IP Allowlist Priority 1000: Allow your network
-if gcloud compute security-policies rules describe 1000 --security-policy checkin-ip-allowlist >/dev/null 2>&1; then
-    gcloud compute security-policies rules update 1000 \
-        --security-policy checkin-ip-allowlist \
-        --src-ip-ranges "$ALLOWED_IP" \
-        --action "allow"
-else
-    gcloud compute security-policies rules create 1000 \
-        --security-policy checkin-ip-allowlist \
-        --description "Allow office network" \
-        --src-ip-ranges "$ALLOWED_IP" \
-        --action "allow"
-fi
-
-# Rate-limit per IP to slow brute-force attempts
-if ! gcloud compute security-policies rules describe 1100 --security-policy checkin-ip-allowlist >/dev/null 2>&1; then
-    gcloud compute security-policies rules create 1100 \
-        --security-policy checkin-ip-allowlist \
-        --description "Throttle per IP" \
-        --src-ip-ranges "$ALLOWED_IP" \
+ensure_rule 900 "Block SQL Injection" --action deny-403 \
+    --expression "evaluatePreconfiguredWaf('sqli-v422-stable', {'sensitivity': 1})"
+ensure_rule 901 "Block Cross-Site Scripting" --action deny-403 \
+    --expression "evaluatePreconfiguredWaf('xss-v422-stable', {'sensitivity': 1})"
+ensure_rule 1000 "Allow office network" --action allow --src-ip-ranges "$ALLOWED_IP"
+if ! exists gcloud compute security-policies rules describe 1100 --security-policy "$POLICY"; then
+    gcloud compute security-policies rules create 1100 --security-policy "$POLICY" \
+        --description "Throttle per IP" --src-ip-ranges "$ALLOWED_IP" \
         --action throttle --rate-limit-threshold-count 60 --rate-limit-threshold-interval-sec 60 \
         --conform-action allow --exceed-action deny-429 --enforce-on-key ip
 fi
 
-# 4b. Reserve a Global Static IP Address
-echo "Reserving global static IP..."
-gcloud compute addresses create ${SERVICE_NAME}-ip \
-    --network-tier=PREMIUM \
-    --global || true
-    
-IP_ADDRESS=$(gcloud compute addresses describe ${SERVICE_NAME}-ip --global --format="value(address)")
+# --- 6. Load balancer -------------------------------------------------------
+echo "--> Creating load balancer..."
+create_if_missing() {  # resource kind, name, then the remaining create flags
+    local kind="$1" name="$2"; shift 2
+    # shellcheck disable=SC2086
+    if ! exists gcloud compute $kind describe "$name" "${SCOPE[@]}"; then
+        # shellcheck disable=SC2086
+        gcloud compute $kind create "$name" "$@" "${SCOPE[@]}"
+    fi
+}
+SCOPE=(--global)
+create_if_missing addresses "${SERVICE_NAME}-ip" --network-tier=PREMIUM
+IP_ADDRESS="$(gcloud compute addresses describe "${SERVICE_NAME}-ip" --global --format='value(address)')"
+create_if_missing ssl-certificates "${SERVICE_NAME}-cert" --domains="$DOMAIN_NAME"
+SCOPE=(--region="$REGION")
+create_if_missing network-endpoint-groups "${SERVICE_NAME}-neg" \
+    --network-endpoint-type=serverless --cloud-run-service="$SERVICE_NAME"
+SCOPE=(--global)
+create_if_missing backend-services "${SERVICE_NAME}-backend" \
+    --security-policy="$POLICY" --load-balancing-scheme=EXTERNAL_MANAGED
+if ! gcloud compute backend-services describe "${SERVICE_NAME}-backend" --global \
+        --format='value(backends[].group)' | grep -q "${SERVICE_NAME}-neg"; then
+    gcloud compute backend-services add-backend "${SERVICE_NAME}-backend" --global \
+        --network-endpoint-group="${SERVICE_NAME}-neg" --network-endpoint-group-region="$REGION"
+fi
+create_if_missing url-maps "${SERVICE_NAME}-url-map" --default-service "${SERVICE_NAME}-backend"
+create_if_missing target-https-proxies "${SERVICE_NAME}-https-proxy" \
+    --url-map="${SERVICE_NAME}-url-map" --ssl-certificates="${SERVICE_NAME}-cert"
+create_if_missing forwarding-rules "${SERVICE_NAME}-https-rule" \
+    --target-https-proxy="${SERVICE_NAME}-https-proxy" --ports=443 --address="${SERVICE_NAME}-ip"
 
-# 5. Create Google-Managed SSL Certificate
-echo "Requesting SSL Certificate for $DOMAIN_NAME..."
-gcloud compute ssl-certificates create ${SERVICE_NAME}-cert \
-    --domains=$DOMAIN_NAME \
-    --global || true
+cat <<MSG
 
-# 6. Create Serverless NEG
-echo "Creating Serverless NEG..."
-gcloud compute network-endpoint-groups create ${SERVICE_NAME}-neg \
-    --region=$REGION \
-    --network-endpoint-type=serverless \
-    --cloud-run-service=$SERVICE_NAME || true
-
-# 7. Create Backend Service and attach Cloud Armor
-echo "Creating Backend Service..."
-gcloud compute backend-services create ${SERVICE_NAME}-backend \
-    --global \
-    --security-policy=checkin-ip-allowlist \
-    --load-balancing-scheme=EXTERNAL_MANAGED || true
-
-gcloud compute backend-services add-backend ${SERVICE_NAME}-backend \
-    --global \
-    --network-endpoint-group=${SERVICE_NAME}-neg \
-    --network-endpoint-group-region=$REGION || true
-
-# 8. Create URL Map
-echo "Creating URL Map..."
-gcloud compute url-maps create ${SERVICE_NAME}-url-map \
-    --default-service ${SERVICE_NAME}-backend || true
-
-# 9. Create Target HTTPS Proxy
-echo "Creating HTTPS Proxy..."
-gcloud compute target-https-proxies create ${SERVICE_NAME}-https-proxy \
-    --url-map=${SERVICE_NAME}-url-map \
-    --ssl-certificates=${SERVICE_NAME}-cert || true
-
-# 10. Create Forwarding Rule (Frontend IP on port 443)
-echo "Creating HTTPS Forwarding Rule..."
-gcloud compute forwarding-rules create ${SERVICE_NAME}-https-rule \
-    --global \
-    --target-https-proxy=${SERVICE_NAME}-https-proxy \
-    --ports=443 \
-    --address=${SERVICE_NAME}-ip || true
-
-echo "======================================================"
-echo "INFRASTRUCTURE PROVISIONED!"
-echo "Static IP Address: $IP_ADDRESS"
-echo "Requested Domain: $DOMAIN_NAME"
-echo "======================================================"
-echo "CRITICAL NEXT STEP:"
-echo "1. Go to your DNS provider."
-echo "2. Create an 'A Record' pointing $DOMAIN_NAME to $IP_ADDRESS"
-echo "Google will provision the SSL certificate automatically once the DNS propagates."
-echo "======================================================"
+======================================================
+DEPLOYED!
+Static IP address: $IP_ADDRESS
+Website:           https://$DOMAIN_NAME
+======================================================
+NEXT STEPS:
+1. At your DNS provider, create an A record: $DOMAIN_NAME -> $IP_ADDRESS
+   (Google issues the SSL certificate automatically once DNS propagates; can take up to an hour.)
+2. Load students (trusted CSV with student_number,name,preferred_name,expected_location):
+     pip install google-cloud-firestore && python seed.py students.csv
+MSG
