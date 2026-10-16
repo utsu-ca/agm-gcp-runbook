@@ -26,8 +26,26 @@ read -p "Enter your Google Spreadsheet ID (leave blank to skip): " SPREADSHEET_I
 
 # NOTE: seed students once, separately, with: python seed.py
 echo ""
-echo "Google Workspace sign-in: create an OAuth 2.0 Web client ID (authorized JS origin: https://$DOMAIN_NAME)."
-read -p "Enter OAuth client ID: " GOOGLE_CLIENT_ID
+# Google does not offer an API/gcloud command to create the OAuth client used by
+# Google Sign-In, so this step is guided: exact values are printed, you paste the result.
+if [ -z "${GOOGLE_CLIENT_ID:-}" ]; then
+    echo ""
+    echo "======== One-time OAuth client setup (about 1 minute) ========"
+    echo "1. Consent screen (set User type = Internal so only your org can sign in):"
+    echo "   https://console.cloud.google.com/auth/overview?project=${PROJECT_ID}"
+    echo "2. Create client: https://console.cloud.google.com/auth/clients/create?project=${PROJECT_ID}"
+    echo "   - Application type:           Web application"
+    echo "   - Authorized JavaScript origins: https://${DOMAIN_NAME}"
+    echo "   - Authorized redirect URIs:      (leave empty)"
+    echo "3. Copy the Client ID (ends in .apps.googleusercontent.com)."
+    echo "   Tip: re-run with GOOGLE_CLIENT_ID=<id> ./deploy.sh to skip this prompt."
+    echo "==============================================================="
+    read -p "Enter OAuth client ID: " GOOGLE_CLIENT_ID
+fi
+if [[ ! "$GOOGLE_CLIENT_ID" =~ ^[0-9A-Za-z._-]+\.apps\.googleusercontent\.com$ ]]; then
+    echo "ERROR: invalid OAuth client ID format." >&2
+    exit 1
+fi
 read -p "Enter your Workspace domain (e.g. example.com): " ALLOWED_DOMAIN
 read -p "Enter comma-separated admin emails (may export data): " ADMIN_EMAILS
 if [ -z "$GOOGLE_CLIENT_ID" ] || [ -z "$ALLOWED_DOMAIN" ]; then
