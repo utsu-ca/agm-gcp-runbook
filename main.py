@@ -246,8 +246,9 @@ def sanitize_sheet_cell(value: Optional[str]) -> str:
     """
     if value is None:
         return ""
-    val_str = str(value).strip()
-    if val_str.startswith(('=', '+', '-', '@', '\t', '\r')):
+    val_str = str(value)
+    stripped = val_str.lstrip()
+    if stripped.startswith(('=', '+', '-', '@', '\t', '\r')):
         return f"'{val_str}"
     return val_str
 
