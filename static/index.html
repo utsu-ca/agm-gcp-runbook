@@ -1,0 +1,125 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Secure Check-in</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body class="bg-gray-100 min-h-screen flex items-center justify-center p-4">
+    <div class="bg-white rounded-xl shadow-lg p-8 w-full max-w-md">
+        <h2 class="text-2xl font-bold text-gray-800 mb-6 text-center">Student Check-in</h2>
+        
+        <div class="space-y-4">
+            <div>
+                <label class="block text-sm font-medium text-gray-700">User ID</label>
+                <input type="text" id="userId" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm border p-2 focus:border-blue-500 focus:ring-blue-500" value="admin1">
+            </div>
+            <div>
+                <label class="block text-sm font-medium text-gray-700">Pre-Shared Key (Hex)</label>
+                <input type="password" id="pskHex" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm border p-2 focus:border-blue-500 focus:ring-blue-500" placeholder="e.g. 0123456789abcdef...">
+            </div>
+            <hr class="my-4">
+            <div>
+                <label class="block text-sm font-medium text-gray-700">Student Number</label>
+                <input type="text" id="studentNum" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm border p-2 focus:border-blue-500 focus:ring-blue-500">
+            </div>
+            <div>
+                <label class="block text-sm font-medium text-gray-700">Location (for check-in)</label>
+                <input type="text" id="location" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm border p-2 focus:border-blue-500 focus:ring-blue-500" placeholder="e.g. Room 101">
+            </div>
+            
+            <div class="flex space-x-3 mt-6">
+                <button onclick="handleStatus()" class="flex-1 bg-gray-600 hover:bg-gray-700 text-white py-2 px-4 rounded-md font-medium transition">Check Status</button>
+                <button onclick="handleCheckIn()" class="flex-1 bg-blue-600 hover:bg-blue-700 text-white py-2 px-4 rounded-md font-medium transition">Check In</button>
+            </div>
+            
+            <div id="output" class="mt-4 p-3 bg-gray-50 rounded-md text-sm font-mono text-gray-700 break-words hidden">
+                <!-- Response goes here -->
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // --- Crypto Helpers ---
+        function hexToBytes(hex) {
+            let bytes = new Uint8Array(hex.length / 2);
+            for (let i = 0; i !== bytes.length; i++) {
+                bytes[i] = parseInt(hex.substr(i * 2, 2), 16);
+            }
+            return bytes;
+        }
+
+        function arrayBufferToBase64(buffer) {
+            let binary = '';
+            let bytes = new Uint8Array(buffer);
+            for (let i = 0; i < bytes.byteLength; i++) {
+                binary += String.fromCharCode(bytes[i]);
+            }
+            return window.btoa(binary);
+        }
+
+        async function encryptPayload(payloadObj, pskHex) {
+            const keyBytes = hexToBytes(pskHex);
+            const key = await window.crypto.subtle.importKey(
+                "raw", keyBytes, { name: "AES-GCM" }, false, ["encrypt"]
+            );
+            
+            const iv = window.crypto.getRandomValues(new Uint8Array(12));
+            const encoder = new TextEncoder();
+            const encodedPayload = encoder.encode(JSON.stringify(payloadObj));
+            
+            const ciphertextBuffer = await window.crypto.subtle.encrypt(
+                { name: "AES-GCM", iv: iv }, key, encodedPayload
+            );
+            
+            return {
+                iv_b64: arrayBufferToBase64(iv),
+                ciphertext_b64: arrayBufferToBase64(ciphertextBuffer)
+            };
+        }
+
+        // --- API Calls ---
+        async function sendRequest(endpoint, payloadObj) {
+            const userId = document.getElementById('userId').value;
+            const pskHex = document.getElementById('pskHex').value;
+            const outputEl = document.getElementById('output');
+            
+            try {
+                const encryptedData = await encryptPayload(payloadObj, pskHex);
+                const reqBody = {
+                    user_id: userId,
+                    iv_b64: encryptedData.iv_b64,
+                    ciphertext_b64: encryptedData.ciphertext_b64
+                };
+                
+                const response = await fetch(`/api/${endpoint}`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(reqBody)
+                });
+                
+                const result = await response.json();
+                outputEl.classList.remove('hidden');
+                outputEl.innerText = JSON.stringify(result, null, 2);
+            } catch (err) {
+                outputEl.classList.remove('hidden');
+                outputEl.innerText = `Error: ${err.message}. Ensure your PSK is a valid hex string.`;
+            }
+        }
+
+        function handleStatus() {
+            sendRequest('is_checked_in', {
+                student_number: document.getElementById('studentNum').value
+            });
+        }
+
+        function handleCheckIn() {
+            sendRequest('check_in', {
+                student_number: document.getElementById('studentNum').value,
+                location: document.getElementById('location').value
+            });
+        }
+    </script>
+</body>
+</html>
