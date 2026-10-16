@@ -1,0 +1,27 @@
+.gcloudignore
+.git
+.gitignore
+
+# Sensitive data and credentials
+*.csv
+admin_credentials.csv
+students.csv
+*.pem
+*.key
+*.cert
+.env
+.env.*
+service-account*.json
+credentials*.json
+
+# Python cache and virtualenvs
+__pycache__/
+*.py[cod]
+.pytest_cache/
+env/
+venv/
+
+# Documentation and editor files
+README.md
+.idea/
+.vscode/
