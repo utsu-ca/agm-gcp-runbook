@@ -142,19 +142,44 @@
 
     <script src="https://accounts.google.com/gsi/client" async defer></script>
     <script>
+        const SESSION_MS = 2 * 60 * 60 * 1000;   // hard cap on a session
+        const REFRESH_MS = 50 * 60 * 1000;       // Google ID tokens last 1 hour; renew before that
         let idToken = null;
+        let sessionStart = 0;
+        let refreshTimer = null;
+
+        function setStatus(msg) {
+            const who = document.getElementById('who');
+            who.classList.add('visible');
+            who.innerText = msg;
+        }
+
+        function endSession(msg) {
+            idToken = null;
+            sessionStart = 0;
+            clearTimeout(refreshTimer);
+            setStatus(msg);
+        }
+
+        function scheduleRefresh() {
+            clearTimeout(refreshTimer);
+            const remaining = sessionStart + SESSION_MS - Date.now();
+            if (remaining <= 0) return endSession('Session expired - sign in again');
+            // Silently ask Google for a fresh token (needs an active Google session in this browser).
+            refreshTimer = setTimeout(() => google.accounts.id.prompt(), Math.min(REFRESH_MS, remaining));
+        }
 
         window.addEventListener('load', async () => {
             const cfg = await (await fetch('/api/config')).json();
             google.accounts.id.initialize({
                 client_id: cfg.client_id,
                 hd: cfg.domain,
+                auto_select: true,
                 callback: (resp) => {
                     idToken = resp.credential;
-                    const who = document.getElementById('who');
-                    who.classList.add('visible');
-                    who.innerText = 'Signed in';
-                    setTimeout(() => { idToken = null; who.innerText = 'Session expired - sign in again'; }, 55 * 60 * 1000);
+                    if (!sessionStart || Date.now() - sessionStart >= SESSION_MS) sessionStart = Date.now();
+                    setStatus('Signed in (session ends ' + new Date(sessionStart + SESSION_MS).toLocaleTimeString() + ')');
+                    scheduleRefresh();
                 }
             });
             google.accounts.id.renderButton(document.getElementById('signin'), { theme: 'outline', size: 'large' });
@@ -169,6 +194,7 @@
                     headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + idToken },
                     body: JSON.stringify(payloadObj)
                 });
+                if (response.status === 401) return endSession('Session expired - sign in again');
                 const result = await response.json();
                 outputEl.classList.add('visible');
                 outputEl.innerText = JSON.stringify(result, null, 2);

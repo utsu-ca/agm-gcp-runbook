@@ -5,3 +5,4 @@
 - There are no roles: every authenticated domain user has the same access. Check-ins record the user's email (`checked_in_by`, and column E of the Live Log) for audit.
 - Cloud Run allows unauthenticated invocation but only accepts traffic from the load balancer (`internal-and-cloud-load-balancing`); Cloud Armor enforces the IP allowlist, WAF and rate limit. Set `ALLOWED_IP` when running `deploy.sh`.
 - Never commit `students.csv` (contains PII).
+- Sessions are capped at 2 hours in the browser; Google ID tokens (1 hour) are silently renewed during that window and verified server-side on every request.
