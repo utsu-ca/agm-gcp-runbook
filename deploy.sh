@@ -1,33 +1,47 @@
 #!/bin/bash
-set -e
+set -e  # Exit immediately if a command fails
+
+# Trapper to capture exact script line and error message on failure
+trap 'echo "❌ ERROR: Deployment script failed at line $LINENO while running command: $BASH_COMMAND"' ERR
 
 # --- CONFIGURATION ---
 PROJECT_ID=$(gcloud config get-value project)
 REGION="us-central1"
 SERVICE_NAME="student-checkin-api"
-ALLOWED_IP="203.0.113.50/32"
+ALLOWED_IP="203.0.113.50/32"  # Change to your actual IP or CIDR block
 
 echo "Deploying to project: $PROJECT_ID in $REGION"
 read -p "Enter your custom domain or subdomain (e.g., checkin.example.com): " DOMAIN_NAME
 
+# NEW PROMPT: Ask for the Spreadsheet ID
+echo ""
+echo "Google Sheets Integration (Optional)"
+echo "If you want a live dashboard, create a Google Sheet and share it with:"
+echo "checkin-api-sa@${PROJECT_ID}.iam.gserviceaccount.com"
+read -p "Enter your Google Spreadsheet ID (leave blank to skip): " SPREADSHEET_ID
+
 # 0. Initialize Database
-echo "Installing dependencies and seeding Firestore database..."
+echo "--> Initializing and seeding Firestore database..."
 pip install -r requirements.txt
 python seed.py
 
-# 1. Enable required APIs
-echo "Enabling GCP APIs..."
-gcloud services enable run.googleapis.com compute.googleapis.com firestore.googleapis.com
+# 1. Enable GCP Services
+echo "--> Enabling GCP APIs..."
+gcloud services enable run.googleapis.com compute.googleapis.com firestore.googleapis.com iam.googleapis.com sheets.googleapis.com
 
 # 2. Setup Least Privilege Service Account
-echo "Creating least privilege service account..."
+echo "--> Setting up service account..."
 SA_NAME="checkin-api-sa"
 SA_EMAIL="${SA_NAME}@${PROJECT_ID}.iam.gserviceaccount.com"
 
 if ! gcloud iam service-accounts describe $SA_EMAIL >/dev/null 2>&1; then
+    echo "Creating service account $SA_NAME..."
     gcloud iam service-accounts create $SA_NAME --display-name="Student Checkin API SA"
+else
+    echo "Service account $SA_NAME already exists."
 fi
 
+echo "Binding Firestore Data User permissions to service account..."
 gcloud projects add-iam-policy-binding $PROJECT_ID \
     --member="serviceAccount:$SA_EMAIL" \
     --role="roles/datastore.user" \
@@ -35,14 +49,24 @@ gcloud projects add-iam-policy-binding $PROJECT_ID \
     --quiet
 
 # 3. Deploy Cloud Run
-echo "Deploying Cloud Run service..."
-gcloud run deploy $SERVICE_NAME \
+echo "--> Deploying Cloud Run service container..."
+
+# Build the deployment command conditionally based on whether a Spreadsheet ID was provided
+DEPLOY_CMD="gcloud run deploy $SERVICE_NAME \
     --source . \
     --region=$REGION \
     --ingress=internal-and-cloud-load-balancing \
     --allow-unauthenticated \
     --service-account=$SA_EMAIL \
-    --quiet
+    --quiet"
+
+# Inject the environment variable if the user provided one
+if [ -n "$SPREADSHEET_ID" ]; then
+    DEPLOY_CMD="$DEPLOY_CMD --set-env-vars=SPREADSHEET_ID=$SPREADSHEET_ID"
+fi
+
+# Execute the deployment command
+eval $DEPLOY_CMD
 
 # 4. Create & Configure Cloud Armor Security Policy
 echo "Configuring Cloud Armor policy & WAF..."
