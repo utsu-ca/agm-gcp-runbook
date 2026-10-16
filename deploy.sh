@@ -8,7 +8,7 @@ trap 'echo "❌ ERROR: Deployment script failed at line $LINENO while running co
 PROJECT_ID=$(gcloud config get-value project)
 REGION="us-central1"
 SERVICE_NAME="student-checkin-api"
-ALLOWED_IP="${ALLOWED_IP:-}"  # Your admin IP or CIDR block, e.g. ALLOWED_IP=198.51.100.7/32 ./deploy.sh
+ALLOWED_IP="${ALLOWED_IP:-}"  # Your office IP or CIDR block, e.g. ALLOWED_IP=198.51.100.7/32 ./deploy.sh
 if [ -z "$ALLOWED_IP" ]; then
     echo "ERROR: set ALLOWED_IP (CIDR) before running." >&2
     exit 1
@@ -47,7 +47,6 @@ if [[ ! "$GOOGLE_CLIENT_ID" =~ ^[0-9A-Za-z._-]+\.apps\.googleusercontent\.com$ ]
     exit 1
 fi
 read -p "Enter your Workspace domain (e.g. example.com): " ALLOWED_DOMAIN
-read -p "Enter comma-separated admin emails (may export data): " ADMIN_EMAILS
 if [ -z "$GOOGLE_CLIENT_ID" ] || [ -z "$ALLOWED_DOMAIN" ]; then
     echo "ERROR: client ID and domain are required." >&2
     exit 1
@@ -87,8 +86,7 @@ DEPLOY_ARGS=(
     --service-account="$SA_EMAIL"
     --quiet
 )
-# Custom delimiter (^|^) so admin emails may contain commas
-ENV_VARS="^|^GOOGLE_CLIENT_ID=$GOOGLE_CLIENT_ID|ALLOWED_DOMAIN=$ALLOWED_DOMAIN|ADMIN_EMAILS=$ADMIN_EMAILS"
+ENV_VARS="^|^GOOGLE_CLIENT_ID=$GOOGLE_CLIENT_ID|ALLOWED_DOMAIN=$ALLOWED_DOMAIN"
 if [ -n "$SPREADSHEET_ID" ]; then
     ENV_VARS="$ENV_VARS|SPREADSHEET_ID=$SPREADSHEET_ID"
 fi
@@ -127,7 +125,7 @@ if gcloud compute security-policies rules describe 1000 --security-policy checki
 else
     gcloud compute security-policies rules create 1000 \
         --security-policy checkin-ip-allowlist \
-        --description "Allow admin network" \
+        --description "Allow office network" \
         --src-ip-ranges "$ALLOWED_IP" \
         --action "allow"
 fi

@@ -28,7 +28,17 @@ else:
     print("Warning: SPREADSHEET_ID environment variable not set. Dashboard exports are disabled.")
     sheets_service = None
 
-app = FastAPI(title="Student Check-in API")
+app = FastAPI(title="Student Check-in API", docs_url=None, redoc_url=None, openapi_url=None)
+
+@app.middleware("http")
+async def security_headers(request, call_next):
+    response = await call_next(request)
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["X-Frame-Options"] = "DENY"
+    response.headers["Referrer-Policy"] = "no-referrer"
+    response.headers["Strict-Transport-Security"] = "max-age=31536000"
+    response.headers["Cache-Control"] = "no-store"
+    return response
 
 # Automatically uses the service account attached to your Cloud Run instance
 db = firestore.Client()
@@ -36,14 +46,12 @@ db = firestore.Client()
 # --- Auth (Google Workspace domain) ---
 GOOGLE_CLIENT_ID = os.environ.get("GOOGLE_CLIENT_ID", "")
 ALLOWED_DOMAIN = os.environ.get("ALLOWED_DOMAIN", "").lower()
-ADMIN_EMAILS = {e.strip().lower() for e in os.environ.get("ADMIN_EMAILS", "").split(",") if e.strip()}
 
 if not GOOGLE_CLIENT_ID or not ALLOWED_DOMAIN:
     raise RuntimeError("GOOGLE_CLIENT_ID and ALLOWED_DOMAIN environment variables are required.")
 
 class User(BaseModel):
     email: str
-    is_admin: bool
 
 def current_user(authorization: str = Header(default="")) -> User:
     """Verifies a Google ID token and requires an employee of the allowed Workspace domain."""
@@ -52,7 +60,7 @@ def current_user(authorization: str = Header(default="")) -> User:
         raise HTTPException(status_code=401, detail="Authentication required.")
     try:
         claims = id_token.verify_oauth2_token(token, google_requests.Request(), GOOGLE_CLIENT_ID)
-    except ValueError:
+    except Exception:
         raise HTTPException(status_code=401, detail="Authentication failed.")
     email = str(claims.get("email", "")).lower()
     # 'hd' is set by Google only for Workspace accounts; also check the email suffix.
@@ -60,12 +68,7 @@ def current_user(authorization: str = Header(default="")) -> User:
             or str(claims.get("hd", "")).lower() != ALLOWED_DOMAIN
             or not email.endswith("@" + ALLOWED_DOMAIN)):
         raise HTTPException(status_code=403, detail="Forbidden.")
-    return User(email=email, is_admin=email in ADMIN_EMAILS)
-
-def require_admin(user: User = Depends(current_user)) -> User:
-    if not user.is_admin:
-        raise HTTPException(status_code=403, detail="Forbidden.")
-    return user
+    return User(email=email)
 
 @app.get("/api/config")
 def public_config():
@@ -82,18 +85,18 @@ class CheckInRequest(BaseModel):
     attendance_mode: Literal["in-person", "virtual"]
 
 # --- Background Task Functions ---
-def append_to_live_log(student_number: str, location: str, mode: str):
+def append_to_live_log(student_number: str, location: str, mode: str, staff_email: str):
     """Appends a single row to the 'Live Log' tab instantly."""
     if not sheets_service: return
     
     timestamp_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    values = [[timestamp_str, student_number, mode, location]]
+    values = [[timestamp_str, student_number, mode, location, staff_email]]
     body = {'values': values}
     
     try:
         sheets_service.spreadsheets().values().append(
             spreadsheetId=SPREADSHEET_ID,
-            range="Live Log!A:D",
+            range="Live Log!A:E",
             valueInputOption="RAW",
             body=body
         ).execute()
@@ -160,7 +163,7 @@ def is_checked_in(payload: StatusRequest, user: User = Depends(current_user)):
     }
 
 @firestore.transactional
-def atomic_check_in_transaction(transaction, student_ref, location, attendance_mode, student_number):
+def atomic_check_in_transaction(transaction, student_ref, location, attendance_mode, student_number, staff_email):
     """Executes the check-in logic atomically."""
     snapshot = student_ref.get(transaction=transaction)
     
@@ -174,7 +177,8 @@ def atomic_check_in_transaction(transaction, student_ref, location, attendance_m
     transaction.update(student_ref, {
         "checked_in": True,
         "current_location": location,
-        "attendance_mode": attendance_mode
+        "attendance_mode": attendance_mode,
+        "checked_in_by": staff_email
     })
     return {"student_number": student_number, "result": "success: checked student in"}
 
@@ -189,7 +193,8 @@ def check_in(payload: CheckInRequest, background_tasks: BackgroundTasks, user: U
         student_ref,
         payload.location,
         payload.attendance_mode,
-        payload.student_number
+        payload.student_number,
+        user.email
     )
 
     if "success" in result["result"]:
@@ -197,13 +202,14 @@ def check_in(payload: CheckInRequest, background_tasks: BackgroundTasks, user: U
             append_to_live_log,
             payload.student_number,
             payload.location,
-            payload.attendance_mode
+            payload.attendance_mode,
+            user.email
         )
     return result
 
 @app.post("/api/trigger_export")
-def trigger_export(background_tasks: BackgroundTasks, user: User = Depends(require_admin)):
-    """Admin-only: export all students to the spreadsheet."""
+def trigger_export(background_tasks: BackgroundTasks, user: User = Depends(current_user)):
+    """Export all students to the spreadsheet."""
     background_tasks.add_task(run_full_export)
     return {"status": "Full export started in the background."}
 

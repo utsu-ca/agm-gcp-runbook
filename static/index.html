@@ -106,7 +106,6 @@
     <div class="card">
         <h2>Student Check-in</h2>
         
-        <div id="g_id_onload" style="display:none"></div>
         <div id="signin"></div>
         <p id="who" class="output"></p>
         <hr>
@@ -155,6 +154,7 @@
                     const who = document.getElementById('who');
                     who.classList.add('visible');
                     who.innerText = 'Signed in';
+                    setTimeout(() => { idToken = null; who.innerText = 'Session expired - sign in again'; }, 55 * 60 * 1000);
                 }
             });
             google.accounts.id.renderButton(document.getElementById('signin'), { theme: 'outline', size: 'large' });

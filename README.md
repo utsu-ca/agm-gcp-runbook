@@ -18,7 +18,7 @@ A secure, serverless application for atomic student check-ins. Built with Python
 Before deploying, initialize your database:
 1. Go to the GCP Console -> **Firestore**.
 2. Create a Native Mode database.
-3. Authentication uses Google Sign-In restricted to your Workspace domain. Set `GOOGLE_CLIENT_ID`, `ALLOWED_DOMAIN` and `ADMIN_EMAILS` (comma-separated; may call `/api/trigger_export`) as environment variables. No `users` collection is needed.
+3. Authentication uses Google Sign-In restricted to your Workspace domain. All signed-in domain users have the same access. Set `GOOGLE_CLIENT_ID` and `ALLOWED_DOMAIN` as environment variables. No `users` collection is needed.
 4. Add a `students` collection. Document ID: `1001`, Fields: `checked_in` (boolean, false), `name` (string), `expected_location` (string).
 
 ## Production Deployment
