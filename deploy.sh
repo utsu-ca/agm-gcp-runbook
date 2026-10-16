@@ -19,30 +19,74 @@ python seed.py
 echo "Enabling GCP APIs..."
 gcloud services enable run.googleapis.com compute.googleapis.com firestore.googleapis.com
 
-# 2. Deploy Cloud Run
+# 2. Setup Least Privilege Service Account
+echo "Creating least privilege service account..."
+SA_NAME="checkin-api-sa"
+SA_EMAIL="${SA_NAME}@${PROJECT_ID}.iam.gserviceaccount.com"
+
+if ! gcloud iam service-accounts describe $SA_EMAIL >/dev/null 2>&1; then
+    gcloud iam service-accounts create $SA_NAME --display-name="Student Checkin API SA"
+fi
+
+gcloud projects add-iam-policy-binding $PROJECT_ID \
+    --member="serviceAccount:$SA_EMAIL" \
+    --role="roles/datastore.user" \
+    --condition=None \
+    --quiet
+
+# 3. Deploy Cloud Run
 echo "Deploying Cloud Run service..."
 gcloud run deploy $SERVICE_NAME \
     --source . \
     --region=$REGION \
     --ingress=internal-and-cloud-load-balancing \
     --allow-unauthenticated \
+    --service-account=$SA_EMAIL \
     --quiet
 
-# 3. Create Cloud Armor Security Policy
-echo "Creating Cloud Armor policy..."
-gcloud compute security-policies create checkin-ip-allowlist \
-    --description "Deny all except whitelisted IPs" \
-    --global || true
+# 4. Create & Configure Cloud Armor Security Policy
+echo "Configuring Cloud Armor policy & WAF..."
+if ! gcloud compute security-policies describe checkin-ip-allowlist --global >/dev/null 2>&1; then
+    gcloud compute security-policies create checkin-ip-allowlist \
+        --description "WAF and IP Whitelist" --global
+fi
 
+# Set default rule to DENY ALL
 gcloud compute security-policies rules update 2147483647 \
     --security-policy checkin-ip-allowlist \
-    --action "deny-403" || true
+    --action "deny-403"
 
-gcloud compute security-policies rules create 1000 \
-    --security-policy checkin-ip-allowlist \
-    --description "Allow admin network" \
-    --src-ip-ranges "$ALLOWED_IP" \
-    --action "allow" || true
+# WAF Priority 900: Block SQL Injection
+if ! gcloud compute security-policies rules describe 900 --security-policy checkin-ip-allowlist >/dev/null 2>&1; then
+    gcloud compute security-policies rules create 900 \
+        --security-policy checkin-ip-allowlist \
+        --description "Block SQL Injection" \
+        --expression "evaluatePreconfiguredWaf('sqli-v422-stable', {'sensitivity': 1})" \
+        --action "deny-403"
+fi
+
+# WAF Priority 901: Block Cross-Site Scripting
+if ! gcloud compute security-policies rules describe 901 --security-policy checkin-ip-allowlist >/dev/null 2>&1; then
+    gcloud compute security-policies rules create 901 \
+        --security-policy checkin-ip-allowlist \
+        --description "Block XSS" \
+        --expression "evaluatePreconfiguredWaf('xss-v422-stable', {'sensitivity': 1})" \
+        --action "deny-403"
+fi
+
+# IP Allowlist Priority 1000: Allow your network
+if gcloud compute security-policies rules describe 1000 --security-policy checkin-ip-allowlist >/dev/null 2>&1; then
+    gcloud compute security-policies rules update 1000 \
+        --security-policy checkin-ip-allowlist \
+        --src-ip-ranges "$ALLOWED_IP" \
+        --action "allow"
+else
+    gcloud compute security-policies rules create 1000 \
+        --security-policy checkin-ip-allowlist \
+        --description "Allow admin network" \
+        --src-ip-ranges "$ALLOWED_IP" \
+        --action "allow"
+fi
 
 # 4. Reserve a Global Static IP Address
 echo "Reserving global static IP..."
