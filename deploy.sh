@@ -5,12 +5,15 @@ set -e
 PROJECT_ID=$(gcloud config get-value project)
 REGION="us-central1"
 SERVICE_NAME="student-checkin-api"
-ALLOWED_IP="203.0.113.50/32"  # Change to your actual IP or CIDR block before running
+ALLOWED_IP="203.0.113.50/32"
 
 echo "Deploying to project: $PROJECT_ID in $REGION"
-echo "NOTE: Ensure you are authenticated via 'gcloud auth login' and 'gcloud config set project YOUR_PROJECT_ID'"
-
 read -p "Enter your custom domain or subdomain (e.g., checkin.example.com): " DOMAIN_NAME
+
+# 0. Initialize Database
+echo "Installing dependencies and seeding Firestore database..."
+pip install -r requirements.txt
+python seed.py
 
 # 1. Enable required APIs
 echo "Enabling GCP APIs..."
