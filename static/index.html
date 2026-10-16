@@ -4,74 +4,183 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Secure Check-in</title>
-    <script src="https://cdn.tailwindcss.com"></script>
-</head>
-<body class="bg-gray-100 min-h-screen flex items-center justify-center p-4">
-    <div class="bg-white rounded-xl shadow-lg p-8 w-full max-w-md">
-        <h2 class="text-2xl font-bold text-gray-800 mb-6 text-center">Student Check-in</h2>
+    <style>
+        /* Base Reset & Variables */
+        :root {
+            --bg-body: #f3f4f6;
+            --bg-card: #ffffff;
+            --text-main: #1f2937;
+            --text-label: #374151;
+            --border-color: #d1d5db;
+            --focus-ring: #3b82f6;
+            --btn-gray: #4b5563;
+            --btn-gray-hover: #374151;
+            --btn-blue: #2563eb;
+            --btn-blue-hover: #1d4ed8;
+            --font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+        }
+
+        * { box-sizing: border-box; margin: 0; padding: 0; }
         
-        <div class="space-y-4">
-            <div>
-                <label class="block text-sm font-medium text-gray-700">User ID</label>
-                <input type="text" id="userId" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm border p-2 focus:border-blue-500 focus:ring-blue-500" value="admin1">
-            </div>
-            <div>
-                <label class="block text-sm font-medium text-gray-700">Pre-Shared Key (Hex)</label>
-                <input type="password" id="pskHex" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm border p-2 focus:border-blue-500 focus:ring-blue-500" placeholder="e.g. 0123456789abcdef...">
-            </div>
-            <hr class="my-4">
-            <div>
-                <label class="block text-sm font-medium text-gray-700">Student Number</label>
-                <input type="text" id="studentNum" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm border p-2 focus:border-blue-500 focus:ring-blue-500">
-            </div>
-            <div>
-                <label class="block text-sm font-medium text-gray-700">Location (for check-in)</label>
-                <input type="text" id="location" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm border p-2 focus:border-blue-500 focus:ring-blue-500" placeholder="e.g. Room 101">
-            </div>
-            
-            <div class="flex space-x-3 mt-6">
-                <button onclick="handleStatus()" class="flex-1 bg-gray-600 hover:bg-gray-700 text-white py-2 px-4 rounded-md font-medium transition">Check Status</button>
-                <button onclick="handleCheckIn()" class="flex-1 bg-blue-600 hover:bg-blue-700 text-white py-2 px-4 rounded-md font-medium transition">Check In</button>
-            </div>
-            
-            <div id="output" class="mt-4 p-3 bg-gray-50 rounded-md text-sm font-mono text-gray-700 break-words hidden">
-                <!-- Response goes here -->
+        body {
+            font-family: var(--font-family);
+            background-color: var(--bg-body);
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 1rem;
+        }
+
+        .card {
+            background-color: var(--bg-card);
+            border-radius: 0.75rem;
+            box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.1), 0 4px 6px -4px rgba(0, 0, 0, 0.1);
+            padding: 2rem;
+            width: 100%;
+            max-width: 28rem;
+        }
+
+        h2 { font-size: 1.5rem; font-weight: 700; color: var(--text-main); margin-bottom: 1.5rem; text-align: center; }
+        hr { border: 0; border-top: 1px solid #e5e7eb; margin: 1.5rem 0; }
+        
+        .form-group { margin-bottom: 1rem; }
+        label { display: block; font-size: 0.875rem; font-weight: 500; color: var(--text-label); margin-bottom: 0.25rem; }
+        
+        input[type="text"], input[type="password"] {
+            width: 100%;
+            border-radius: 0.375rem;
+            border: 1px solid var(--border-color);
+            padding: 0.5rem;
+            font-family: inherit;
+            font-size: 1rem;
+            box-shadow: 0 1px 2px 0 rgba(0, 0, 0, 0.05);
+            outline: none;
+            transition: border-color 0.2s, box-shadow 0.2s;
+        }
+
+        input[type="text"]:focus, input[type="password"]:focus {
+            border-color: var(--focus-ring);
+            box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.2);
+        }
+
+        .radio-group { display: flex; gap: 1rem; margin-top: 0.25rem; }
+        .radio-label { display: inline-flex; items-center; font-size: 0.875rem; font-weight: 400; color: var(--text-label); cursor: pointer;}
+        .radio-label input { margin-right: 0.5rem; accent-color: var(--btn-blue); cursor: pointer;}
+
+        .btn-group { display: flex; gap: 0.75rem; margin-top: 1.5rem; }
+        button {
+            flex: 1;
+            padding: 0.5rem 1rem;
+            border-radius: 0.375rem;
+            border: none;
+            font-size: 1rem;
+            font-weight: 500;
+            color: #fff;
+            cursor: pointer;
+            transition: background-color 0.2s;
+            font-family: inherit;
+        }
+        
+        .btn-status { background-color: var(--btn-gray); }
+        .btn-status:hover { background-color: var(--btn-gray-hover); }
+        .btn-checkin { background-color: var(--btn-blue); }
+        .btn-checkin:hover { background-color: var(--btn-blue-hover); }
+
+        .output {
+            margin-top: 1rem;
+            padding: 0.75rem;
+            background-color: #f9fafb;
+            border-radius: 0.375rem;
+            font-size: 0.875rem;
+            font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+            color: var(--text-label);
+            word-break: break-all;
+            white-space: pre-wrap;
+            display: none;
+        }
+        .output.visible { display: block; }
+    </style>
+</head>
+<body>
+    <div class="card">
+        <h2>Student Check-in</h2>
+        
+        <div class="form-group">
+            <label for="userId">User ID</label>
+            <input type="text" id="userId" value="admin1">
+        </div>
+        <div class="form-group">
+            <label for="pskHex">Pre-Shared Key (Hex)</label>
+            <input type="password" id="pskHex" placeholder="e.g. 0123456789abcdef...">
+        </div>
+        
+        <hr>
+        
+        <div class="form-group">
+            <label for="studentNum">Student Number</label>
+            <input type="text" id="studentNum">
+        </div>
+        
+        <div class="form-group">
+            <label>Attendance Mode</label>
+            <div class="radio-group">
+                <label class="radio-label">
+                    <input type="radio" name="attendance" value="in-person" checked> In-Person
+                </label>
+                <label class="radio-label">
+                    <input type="radio" name="attendance" value="virtual"> Virtual
+                </label>
             </div>
         </div>
+        
+        <div class="form-group">
+            <label for="location">Location (if in-person)</label>
+            <input type="text" id="location" placeholder="e.g. Room 101">
+        </div>
+        
+        <div class="btn-group">
+            <button onclick="handleStatus()" class="btn-status">Check Status</button>
+            <button onclick="handleCheckIn()" class="btn-checkin">Check In</button>
+        </div>
+        
+        <div id="output" class="output"></div>
     </div>
 
     <script>
-        // --- Crypto Helpers ---
+        // URL Hash Parsing for automated login via links
+        window.addEventListener('DOMContentLoaded', () => {
+            if (window.location.hash) {
+                const hashParams = new URLSearchParams(window.location.hash.substring(1));
+                const user = hashParams.get('user');
+                const psk = hashParams.get('psk');
+                if (user) document.getElementById('userId').value = user;
+                if (psk) document.getElementById('pskHex').value = psk;
+                history.replaceState(null, null, window.location.pathname);
+            }
+        });
+
+        // Crypto Helpers
         function hexToBytes(hex) {
             let bytes = new Uint8Array(hex.length / 2);
-            for (let i = 0; i !== bytes.length; i++) {
-                bytes[i] = parseInt(hex.substr(i * 2, 2), 16);
-            }
+            for (let i = 0; i !== bytes.length; i++) bytes[i] = parseInt(hex.substr(i * 2, 2), 16);
             return bytes;
         }
 
         function arrayBufferToBase64(buffer) {
             let binary = '';
             let bytes = new Uint8Array(buffer);
-            for (let i = 0; i < bytes.byteLength; i++) {
-                binary += String.fromCharCode(bytes[i]);
-            }
+            for (let i = 0; i < bytes.byteLength; i++) binary += String.fromCharCode(bytes[i]);
             return window.btoa(binary);
         }
 
         async function encryptPayload(payloadObj, pskHex) {
             const keyBytes = hexToBytes(pskHex);
-            const key = await window.crypto.subtle.importKey(
-                "raw", keyBytes, { name: "AES-GCM" }, false, ["encrypt"]
-            );
-            
+            const key = await window.crypto.subtle.importKey("raw", keyBytes, { name: "AES-GCM" }, false, ["encrypt"]);
             const iv = window.crypto.getRandomValues(new Uint8Array(12));
             const encoder = new TextEncoder();
             const encodedPayload = encoder.encode(JSON.stringify(payloadObj));
-            
-            const ciphertextBuffer = await window.crypto.subtle.encrypt(
-                { name: "AES-GCM", iv: iv }, key, encodedPayload
-            );
+            const ciphertextBuffer = await window.crypto.subtle.encrypt({ name: "AES-GCM", iv: iv }, key, encodedPayload);
             
             return {
                 iv_b64: arrayBufferToBase64(iv),
@@ -79,7 +188,7 @@
             };
         }
 
-        // --- API Calls ---
+        // API Calls
         async function sendRequest(endpoint, payloadObj) {
             const userId = document.getElementById('userId').value;
             const pskHex = document.getElementById('pskHex').value;
@@ -87,11 +196,7 @@
             
             try {
                 const encryptedData = await encryptPayload(payloadObj, pskHex);
-                const reqBody = {
-                    user_id: userId,
-                    iv_b64: encryptedData.iv_b64,
-                    ciphertext_b64: encryptedData.ciphertext_b64
-                };
+                const reqBody = { user_id: userId, iv_b64: encryptedData.iv_b64, ciphertext_b64: encryptedData.ciphertext_b64 };
                 
                 const response = await fetch(`/api/${endpoint}`, {
                     method: 'POST',
@@ -100,24 +205,24 @@
                 });
                 
                 const result = await response.json();
-                outputEl.classList.remove('hidden');
+                outputEl.classList.add('visible');
                 outputEl.innerText = JSON.stringify(result, null, 2);
             } catch (err) {
-                outputEl.classList.remove('hidden');
-                outputEl.innerText = `Error: ${err.message}. Ensure your PSK is a valid hex string.`;
+                outputEl.classList.add('visible');
+                outputEl.innerText = `Error: ${err.message}`;
             }
         }
 
         function handleStatus() {
-            sendRequest('is_checked_in', {
-                student_number: document.getElementById('studentNum').value
-            });
+            sendRequest('is_checked_in', { student_number: document.getElementById('studentNum').value });
         }
 
         function handleCheckIn() {
+            const attendance = document.querySelector('input[name="attendance"]:checked').value;
             sendRequest('check_in', {
                 student_number: document.getElementById('studentNum').value,
-                location: document.getElementById('location').value
+                location: document.getElementById('location').value,
+                attendance_mode: attendance
             });
         }
     </script>
