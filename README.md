@@ -14,18 +14,17 @@ A secure, serverless application for atomic student check-ins. Built with Python
 3. Start the server: `uvicorn main:app --reload`
 4. Open `http://localhost:8000`
 
-## Google Cloud Setup (Firestore)
-Before deploying, initialize your database:
-1. Go to the GCP Console -> **Firestore**.
-2. Create a Native Mode database.
-3. Authentication uses Google Sign-In restricted to your Workspace domain. All signed-in domain users have the same access. Set `GOOGLE_CLIENT_ID` and `ALLOWED_DOMAIN` as environment variables. No `users` collection is needed.
-4. Add a `students` collection. Document ID: `1001`, Fields: `checked_in` (boolean, false), `name` (string), `expected_location` (string).
+## Local Firestore data
+1. Use a Firestore Native Mode database (`deploy.sh` creates one).
+2. Seed with `python seed.py`.
+3. Authentication uses Google Sign-In restricted to your Workspace domain; all signed-in domain users have the same access. Set `GOOGLE_CLIENT_ID` and `ALLOWED_DOMAIN` as environment variables.
 
 ## Production Deployment
-The entire project can be deployed using the automated bash script. 
+Designed to be run from Google Cloud Shell in a project with billing enabled:
 
-1. Edit `deploy.sh` and change the `ALLOWED_IP` variable to your IP address.
-2. Run `chmod +x deploy.sh`
-3. Run `./deploy.sh`
-4. Enter your target domain when prompted.
-5. Create an A-record in your DNS provider pointing to the provided Static IP address.
+1. `git clone` this repo and `cd` into it.
+2. Run `./deploy.sh` and answer the prompts (site address, Workspace domain, office IP, OAuth client ID, optional Sheet ID). Any answer can be preset via env var (`DOMAIN_NAME`, `ALLOWED_DOMAIN`, `GOOGLE_CLIENT_ID`, `ALLOWED_IP`, `SPREADSHEET_ID`). The script is safe to re-run.
+3. Create the A record the script prints at your DNS provider.
+4. Load students: `python seed.py students.csv` (columns `student_number,name,preferred_name,expected_location`; seed data is trusted).
+
+If a Spreadsheet ID is given, the service refreshes the "Full Export" tab every minute (`EXPORT_INTERVAL_SEC`) and appends each check-in to "Live Log" (times in `TIMEZONE`, default `America/Toronto`).
