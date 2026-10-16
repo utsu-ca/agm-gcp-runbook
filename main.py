@@ -154,6 +154,7 @@ def is_checked_in(payload: StatusRequest, user: User = Depends(current_user)):
     return {
         "student_number": student_number,
         "checked_in": data.get("checked_in", False),
+        "name": data.get("name", ""),
         "preferred_name": data.get("preferred_name", ""),
         "expected_location": data.get("expected_location", "")
     }
