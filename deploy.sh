@@ -8,7 +8,11 @@ trap 'echo "❌ ERROR: Deployment script failed at line $LINENO while running co
 PROJECT_ID=$(gcloud config get-value project)
 REGION="us-central1"
 SERVICE_NAME="student-checkin-api"
-ALLOWED_IP="203.0.113.50/32"  # Change to your actual IP or CIDR block
+ALLOWED_IP="${ALLOWED_IP:-}"  # Your office IP or CIDR block, e.g. ALLOWED_IP=198.51.100.7/32 ./deploy.sh
+if [ -z "$ALLOWED_IP" ]; then
+    echo "ERROR: set ALLOWED_IP (CIDR) before running." >&2
+    exit 1
+fi
 
 echo "Deploying to project: $PROJECT_ID in $REGION"
 read -p "Enter your custom domain or subdomain (e.g., checkin.example.com): " DOMAIN_NAME
@@ -20,10 +24,33 @@ echo "If you want a live dashboard, create a Google Sheet and share it with:"
 echo "checkin-api-sa@${PROJECT_ID}.iam.gserviceaccount.com"
 read -p "Enter your Google Spreadsheet ID (leave blank to skip): " SPREADSHEET_ID
 
-# 0. Initialize Database
-echo "--> Initializing and seeding Firestore database..."
-pip install -r requirements.txt
-python seed.py
+# NOTE: seed students once, separately, with: python seed.py
+echo ""
+# Google does not offer an API/gcloud command to create the OAuth client used by
+# Google Sign-In, so this step is guided: exact values are printed, you paste the result.
+if [ -z "${GOOGLE_CLIENT_ID:-}" ]; then
+    echo ""
+    echo "======== One-time OAuth client setup (about 1 minute) ========"
+    echo "1. Consent screen (set User type = Internal so only your org can sign in):"
+    echo "   https://console.cloud.google.com/auth/overview?project=${PROJECT_ID}"
+    echo "2. Create client: https://console.cloud.google.com/auth/clients/create?project=${PROJECT_ID}"
+    echo "   - Application type:           Web application"
+    echo "   - Authorized JavaScript origins: https://${DOMAIN_NAME}"
+    echo "   - Authorized redirect URIs:      (leave empty)"
+    echo "3. Copy the Client ID (ends in .apps.googleusercontent.com)."
+    echo "   Tip: re-run with GOOGLE_CLIENT_ID=<id> ./deploy.sh to skip this prompt."
+    echo "==============================================================="
+    read -p "Enter OAuth client ID: " GOOGLE_CLIENT_ID
+fi
+if [[ ! "$GOOGLE_CLIENT_ID" =~ ^[0-9A-Za-z._-]+\.apps\.googleusercontent\.com$ ]]; then
+    echo "ERROR: invalid OAuth client ID format." >&2
+    exit 1
+fi
+read -p "Enter your Workspace domain (e.g. example.com): " ALLOWED_DOMAIN
+if [ -z "$GOOGLE_CLIENT_ID" ] || [ -z "$ALLOWED_DOMAIN" ]; then
+    echo "ERROR: client ID and domain are required." >&2
+    exit 1
+fi
 
 # 1. Enable GCP Services
 echo "--> Enabling GCP APIs..."
@@ -51,22 +78,21 @@ gcloud projects add-iam-policy-binding $PROJECT_ID \
 # 3. Deploy Cloud Run
 echo "--> Deploying Cloud Run service container..."
 
-# Build the deployment command conditionally based on whether a Spreadsheet ID was provided
-DEPLOY_CMD="gcloud run deploy $SERVICE_NAME \
-    --source . \
-    --region=$REGION \
-    --ingress=internal-and-cloud-load-balancing \
-    --allow-unauthenticated \
-    --service-account=$SA_EMAIL \
-    --quiet"
-
-# Inject the environment variable if the user provided one
+DEPLOY_ARGS=(
+    --source .
+    --region="$REGION"
+    --ingress=internal-and-cloud-load-balancing
+    --allow-unauthenticated  # reachable only via the load balancer, which enforces Cloud Armor
+    --service-account="$SA_EMAIL"
+    --quiet
+)
+ENV_VARS="^|^GOOGLE_CLIENT_ID=$GOOGLE_CLIENT_ID|ALLOWED_DOMAIN=$ALLOWED_DOMAIN"
 if [ -n "$SPREADSHEET_ID" ]; then
-    DEPLOY_CMD="$DEPLOY_CMD --set-env-vars=SPREADSHEET_ID=$SPREADSHEET_ID"
+    ENV_VARS="$ENV_VARS|SPREADSHEET_ID=$SPREADSHEET_ID"
 fi
+DEPLOY_ARGS+=(--set-env-vars="$ENV_VARS")
 
-# Execute the deployment command
-eval $DEPLOY_CMD
+gcloud run deploy "$SERVICE_NAME" "${DEPLOY_ARGS[@]}"
 
 # 4. Create & Configure Cloud Armor Security Policy
 echo "Configuring Cloud Armor policy & WAF..."
@@ -80,23 +106,15 @@ gcloud compute security-policies rules update 2147483647 \
     --security-policy checkin-ip-allowlist \
     --action "deny-403"
 
-# WAF Priority 900: Block SQL Injection
-if ! gcloud compute security-policies rules describe 900 --security-policy checkin-ip-allowlist >/dev/null 2>&1; then
-    gcloud compute security-policies rules create 900 \
-        --security-policy checkin-ip-allowlist \
-        --description "Block SQL Injection" \
-        --expression "evaluatePreconfiguredWaf('sqli-v422-stable', {'sensitivity': 1})" \
-        --action "deny-403"
-fi
-
-# WAF Priority 901: Block Cross-Site Scripting
-if ! gcloud compute security-policies rules describe 901 --security-policy checkin-ip-allowlist >/dev/null 2>&1; then
-    gcloud compute security-policies rules create 901 \
-        --security-policy checkin-ip-allowlist \
-        --description "Block XSS" \
-        --expression "evaluatePreconfiguredWaf('xss-v422-stable', {'sensitivity': 1})" \
-        --action "deny-403"
-fi
+ensure_waf_rule() {  # priority, description, expression
+    if ! gcloud compute security-policies rules describe "$1" --security-policy checkin-ip-allowlist >/dev/null 2>&1; then
+        gcloud compute security-policies rules create "$1" \
+            --security-policy checkin-ip-allowlist \
+            --description "$2" --expression "$3" --action "deny-403"
+    fi
+}
+ensure_waf_rule 900 "Block SQL Injection" "evaluatePreconfiguredWaf('sqli-v422-stable', {'sensitivity': 1})"
+ensure_waf_rule 901 "Block Cross-Site Scripting" "evaluatePreconfiguredWaf('xss-v422-stable', {'sensitivity': 1})"
 
 # IP Allowlist Priority 1000: Allow your network
 if gcloud compute security-policies rules describe 1000 --security-policy checkin-ip-allowlist >/dev/null 2>&1; then
@@ -107,12 +125,22 @@ if gcloud compute security-policies rules describe 1000 --security-policy checki
 else
     gcloud compute security-policies rules create 1000 \
         --security-policy checkin-ip-allowlist \
-        --description "Allow admin network" \
+        --description "Allow office network" \
         --src-ip-ranges "$ALLOWED_IP" \
         --action "allow"
 fi
 
-# 4. Reserve a Global Static IP Address
+# Rate-limit per IP to slow brute-force attempts
+if ! gcloud compute security-policies rules describe 1100 --security-policy checkin-ip-allowlist >/dev/null 2>&1; then
+    gcloud compute security-policies rules create 1100 \
+        --security-policy checkin-ip-allowlist \
+        --description "Throttle per IP" \
+        --src-ip-ranges "$ALLOWED_IP" \
+        --action throttle --rate-limit-threshold-count 60 --rate-limit-threshold-interval-sec 60 \
+        --conform-action allow --exceed-action deny-429 --enforce-on-key ip
+fi
+
+# 4b. Reserve a Global Static IP Address
 echo "Reserving global static IP..."
 gcloud compute addresses create ${SERVICE_NAME}-ip \
     --network-tier=PREMIUM \

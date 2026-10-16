@@ -106,15 +106,8 @@
     <div class="card">
         <h2>Student Check-in</h2>
         
-        <div class="form-group">
-            <label for="userId">User ID</label>
-            <input type="text" id="userId" value="admin1">
-        </div>
-        <div class="form-group">
-            <label for="pskHex">Pre-Shared Key (Hex)</label>
-            <input type="password" id="pskHex" placeholder="e.g. 0123456789abcdef...">
-        </div>
-        
+        <div id="signin"></div>
+        <p id="who" class="output"></p>
         <hr>
         
         <div class="form-group">
@@ -147,63 +140,61 @@
         <div id="output" class="output"></div>
     </div>
 
+    <script src="https://accounts.google.com/gsi/client" async defer></script>
     <script>
-        // URL Hash Parsing for automated login via links
-        window.addEventListener('DOMContentLoaded', () => {
-            if (window.location.hash) {
-                const hashParams = new URLSearchParams(window.location.hash.substring(1));
-                const user = hashParams.get('user');
-                const psk = hashParams.get('psk');
-                if (user) document.getElementById('userId').value = user;
-                if (psk) document.getElementById('pskHex').value = psk;
-                history.replaceState(null, null, window.location.pathname);
-            }
+        const SESSION_MS = 2 * 60 * 60 * 1000;   // hard cap on a session
+        const REFRESH_MS = 50 * 60 * 1000;       // Google ID tokens last 1 hour; renew before that
+        let idToken = null;
+        let sessionStart = 0;
+        let refreshTimer = null;
+
+        function setStatus(msg) {
+            const who = document.getElementById('who');
+            who.classList.add('visible');
+            who.innerText = msg;
+        }
+
+        function endSession(msg) {
+            idToken = null;
+            sessionStart = 0;
+            clearTimeout(refreshTimer);
+            setStatus(msg);
+        }
+
+        function scheduleRefresh() {
+            clearTimeout(refreshTimer);
+            const remaining = sessionStart + SESSION_MS - Date.now();
+            if (remaining <= 0) return endSession('Session expired - sign in again');
+            // Silently ask Google for a fresh token (needs an active Google session in this browser).
+            refreshTimer = setTimeout(() => google.accounts.id.prompt(), Math.min(REFRESH_MS, remaining));
+        }
+
+        window.addEventListener('load', async () => {
+            const cfg = await (await fetch('/api/config')).json();
+            google.accounts.id.initialize({
+                client_id: cfg.client_id,
+                hd: cfg.domain,
+                auto_select: true,
+                callback: (resp) => {
+                    idToken = resp.credential;
+                    if (!sessionStart || Date.now() - sessionStart >= SESSION_MS) sessionStart = Date.now();
+                    setStatus('Signed in (session ends ' + new Date(sessionStart + SESSION_MS).toLocaleTimeString() + ')');
+                    scheduleRefresh();
+                }
+            });
+            google.accounts.id.renderButton(document.getElementById('signin'), { theme: 'outline', size: 'large' });
         });
 
-        // Crypto Helpers
-        function hexToBytes(hex) {
-            let bytes = new Uint8Array(hex.length / 2);
-            for (let i = 0; i !== bytes.length; i++) bytes[i] = parseInt(hex.substr(i * 2, 2), 16);
-            return bytes;
-        }
-
-        function arrayBufferToBase64(buffer) {
-            let binary = '';
-            let bytes = new Uint8Array(buffer);
-            for (let i = 0; i < bytes.byteLength; i++) binary += String.fromCharCode(bytes[i]);
-            return window.btoa(binary);
-        }
-
-        async function encryptPayload(payloadObj, pskHex) {
-            const keyBytes = hexToBytes(pskHex);
-            const key = await window.crypto.subtle.importKey("raw", keyBytes, { name: "AES-GCM" }, false, ["encrypt"]);
-            const iv = window.crypto.getRandomValues(new Uint8Array(12));
-            const encoder = new TextEncoder();
-            const encodedPayload = encoder.encode(JSON.stringify(payloadObj));
-            const ciphertextBuffer = await window.crypto.subtle.encrypt({ name: "AES-GCM", iv: iv }, key, encodedPayload);
-            
-            return {
-                iv_b64: arrayBufferToBase64(iv),
-                ciphertext_b64: arrayBufferToBase64(ciphertextBuffer)
-            };
-        }
-
-        // API Calls
         async function sendRequest(endpoint, payloadObj) {
-            const userId = document.getElementById('userId').value;
-            const pskHex = document.getElementById('pskHex').value;
             const outputEl = document.getElementById('output');
-            
+            if (!idToken) { outputEl.classList.add('visible'); outputEl.innerText = 'Sign in first.'; return; }
             try {
-                const encryptedData = await encryptPayload(payloadObj, pskHex);
-                const reqBody = { user_id: userId, iv_b64: encryptedData.iv_b64, ciphertext_b64: encryptedData.ciphertext_b64 };
-                
                 const response = await fetch(`/api/${endpoint}`, {
                     method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify(reqBody)
+                    headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + idToken },
+                    body: JSON.stringify(payloadObj)
                 });
-                
+                if (response.status === 401) return endSession('Session expired - sign in again');
                 const result = await response.json();
                 outputEl.classList.add('visible');
                 outputEl.innerText = JSON.stringify(result, null, 2);

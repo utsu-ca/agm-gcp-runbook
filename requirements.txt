@@ -1,5 +1,6 @@
-fastapi==0.104.1
-uvicorn[standard]==0.24.0.post1
-cryptography==41.0.5
-google-cloud-firestore==2.13.1
-pydantic==2.4.2
+fastapi==0.115.6
+uvicorn[standard]==0.34.0
+google-cloud-firestore==2.19.0
+google-api-python-client==2.155.0
+google-auth==2.36.0
+pydantic==2.10.3
