@@ -142,12 +142,10 @@ ensure_rule 900 "Block SQL Injection" --action deny-403 \
 ensure_rule 901 "Block Cross-Site Scripting" --action deny-403 \
     --expression "evaluatePreconfiguredWaf('xss-v422-stable', {'sensitivity': 1})"
 ensure_rule 1000 "Allow office network" --action allow --src-ip-ranges "$ALLOWED_IP"
-if ! exists gcloud compute security-policies rules describe 1100 --security-policy "$POLICY"; then
-    gcloud compute security-policies rules create 1100 --security-policy "$POLICY" \
-        --description "Throttle per IP" --src-ip-ranges "$ALLOWED_IP" \
-        --action throttle --rate-limit-threshold-count 60 --rate-limit-threshold-interval-sec 60 \
-        --conform-action allow --exceed-action deny-429 --enforce-on-key ip
-fi
+ensure_rule 1000 "Throttle per IP" --action throttle --src-ip-ranges "$ALLOWED_IP" \
+    --rate-limit-threshold-count 60 --rate-limit-threshold-interval-sec 60 \
+    --conform-action allow --exceed-action deny-429 --enforce-on-key ip
+ensure_rule 1100 "Allow office network" --action allow --src-ip-ranges "$ALLOWED_IP"
 
 # --- 6. Load balancer -------------------------------------------------------
 echo "--> Creating load balancer..."
