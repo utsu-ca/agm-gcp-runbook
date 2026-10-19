@@ -3,5 +3,5 @@ uvicorn[standard]==0.34.0
 google-cloud-firestore==2.34.1
 google-api-python-client==2.201.0
 google-auth==2.62.0
-pydantic==2.10.3
+pydantic==2.14.1
 tzdata
