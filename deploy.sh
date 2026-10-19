@@ -93,6 +93,9 @@ fi
 echo "--> Setting up service account..."
 if ! exists gcloud iam service-accounts describe "$SA_EMAIL"; then
     gcloud iam service-accounts create "$SA_NAME" --display-name="Student Checkin API SA"
+    # Add wait to see if it fixes a "account doesn't exist error
+    echo " Sleeping for 30s to ensure account is created... "
+    sleep 30s
 fi
 gcloud projects add-iam-policy-binding "$PROJECT_ID" \
     --member="serviceAccount:$SA_EMAIL" --role="roles/datastore.user" --condition=None --quiet >/dev/null
