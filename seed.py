@@ -21,6 +21,7 @@ def seed_db(path):
         for row in csv.DictReader(f):
             writer.set(db.collection("students").document(uuid.uuid4().hex), {
                 "student_number": row["student_number"].strip(),
+                "card_id": row["student_number"].strip()[-5:-1],
                 "name": row["name"],
                 "last_name": last_name_of(row).lower(),
                 "preferred_name": row["preferred_name"],

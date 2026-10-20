@@ -137,6 +137,7 @@ def public_config():
 
 # --- Request Models ---
 StudentNumber = Annotated[str, Field(pattern=r"^\d+$", max_length=20)]
+CardId = Annotated[str, Field(pattern=r"^\d{4}$")]
 LastName = Annotated[str, Field(min_length=1, max_length=60)]
 RegistrantId = Annotated[str, Field(pattern=r"^[0-9a-f]{32}$")]
 
@@ -144,6 +145,7 @@ class LookupRequest(BaseModel):
     """Either field, or both, may be supplied."""
     student_number: StudentNumber | None = None
     last_name: LastName | None = None
+    card_id: CardId | None = None
 
 class CheckInRequest(BaseModel):
     id: RegistrantId
@@ -177,12 +179,13 @@ def _hit(doc):
         "checked_in": d.get("checked_in", False),
     }
 
-def find_students(student_number, last_name):
+def find_students(student_number, last_name, card_id=None):
     """Number match wins if unique; duplicates are narrowed by last name; otherwise all hits are returned."""
     students = db.collection("students")
     last = (last_name or "").strip().lower()
-    if student_number:
-        hits = list(students.where(filter=FieldFilter("student_number", "==", student_number)).stream())
+    if student_number or card_id:
+        field, value = ("student_number", student_number) if student_number else ("card_id", card_id)
+        hits = list(students.where(filter=FieldFilter(field, "==", value)).stream())
         if len(hits) > 1 and last:
             hits = [h for h in hits if h.to_dict().get("last_name") == last]
         return hits
@@ -190,9 +193,9 @@ def find_students(student_number, last_name):
 
 @app.post("/api/is_checked_in")
 def is_checked_in(payload: LookupRequest, user: str = Depends(current_user)):
-    if not payload.student_number and not (payload.last_name or "").strip():
+    if not payload.student_number and not payload.card_id and not (payload.last_name or "").strip():
         raise HTTPException(status_code=422, detail="Provide a student number and/or last name.")
-    hits = find_students(payload.student_number, payload.last_name)
+    hits = find_students(payload.student_number, payload.last_name, payload.card_id)
     if not hits:
         raise HTTPException(status_code=404, detail="Student not on list.")
     log.info("status lookup (%d hits) by %s", len(hits), user)

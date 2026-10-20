@@ -45,9 +45,10 @@ echo ""
 HOST_RE='^([a-z0-9]([a-z0-9-]*[a-z0-9])?\.)+[a-z]{2,}$'
 ask DOMAIN_NAME    "Website address people will visit (e.g. checkin.example.com)" "$HOST_RE" "enter a hostname like checkin.example.com"
 ask ALLOWED_DOMAIN "Google Workspace domain allowed to sign in" "$HOST_RE" "enter a domain like example.com" "utsu.ca"
-ask ALLOWED_IP     "Office IP or CIDR allowed to connect (e.g. 198.51.100.7/32; find yours at https://ifconfig.me)" \
-    '^([0-9]{1,3}\.){3}[0-9]{1,3}(/[0-9]{1,2})?$' "enter an IPv4 address or CIDR"
-case "$ALLOWED_IP" in */*) ;; *) ALLOWED_IP="$ALLOWED_IP/32" ;; esac
+ask ALLOWED_IP     "Office IPs/CIDRs allowed to connect, comma-separated, max 10 (e.g. 198.51.100.7/32,203.0.113.0/24)" \
+    '^([0-9]{1,3}\.){3}[0-9]{1,3}(/[0-9]{1,2})?(,[[:space:]]*([0-9]{1,3}\.){3}[0-9]{1,3}(/[0-9]{1,2})?){0,9}$' \
+    "enter up to 10 IPv4 addresses or CIDRs separated by commas"
+ALLOWED_IP="$(printf '%s' "$ALLOWED_IP" | tr -d '[:space:]' | tr ',' '\n' | sed 's|^\([^/]*\)$|\1/32|' | paste -sd, -)"
 
 if [ -z "${GOOGLE_CLIENT_ID:-}" ]; then
     cat <<MSG

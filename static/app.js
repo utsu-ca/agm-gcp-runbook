@@ -145,11 +145,26 @@ document.getElementById('btnCheckIn').addEventListener('click', async () => {
     }
 });
 
-// Card reader input: not wired to anything yet. Magstripe readers type the track
-// data then press Enter; we only capture it here.
-document.getElementById('cardInput').addEventListener('keydown', (e) => {
+// Card reader input: magstripe readers type the track data then press Enter.
+// Format: %FIRST^LAST^1007600908^2021-10-27?;2176102213325201?
+// Only the truncated ID (digits at index -5..-2 of the student number, e.g. 0090) is matched.
+function parseCard(raw) {
+    const num = (raw.split('^')[2] || '').trim();
+    return /^\d{5,}$/.test(num) ? num.slice(-5, -1) : null;
+}
+
+document.getElementById('cardInput').addEventListener('keydown', async (e) => {
     if (e.key !== 'Enter') return;
     e.preventDefault();
-    // TODO: parse student number from swipe data and populate #studentNum
+    const card_id = parseCard(e.target.value);
     e.target.value = '';
+    if (!card_id) return showResult('error', '\u2717', 'Unreadable card', 'Swipe again or enter the number manually.');
+    document.getElementById('studentNum').value = '';
+    document.getElementById('lastName').value = '';
+    await sendRequest('is_checked_in', { card_id });
+    const rows = matchesEl.querySelectorAll('.match');
+    if (rows.length === 1) {
+        const btn = rows[0].querySelector('button');
+        if (!btn.disabled) btn.click();
+    }
 });
