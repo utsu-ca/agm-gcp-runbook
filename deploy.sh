@@ -196,6 +196,6 @@ Website:           https://$DOMAIN_NAME
 NEXT STEPS:
 1. At your DNS provider, create an A record: $DOMAIN_NAME -> $IP_ADDRESS
    (Google issues the SSL certificate automatically once DNS propagates; can take up to an hour.)
-2. Load students (trusted CSV with student_number,name,preferred_name,expected_location):
+2. Load students (trusted CSV with student_number,name,preferred_name,expected_location[,last_name]):
      pip install google-cloud-firestore && python seed.py students.csv
 MSG

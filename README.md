@@ -25,6 +25,6 @@ Designed to be run from Google Cloud Shell in a project with billing enabled:
 1. `git clone` this repo and `cd` into it.
 2. Run `./deploy.sh` and answer the prompts (site address, Workspace domain, office IP, OAuth client ID, optional Sheet ID). Any answer can be preset via env var (`DOMAIN_NAME`, `ALLOWED_DOMAIN`, `GOOGLE_CLIENT_ID`, `ALLOWED_IP`, `SPREADSHEET_ID`). The script is safe to re-run.
 3. Create the A record the script prints at your DNS provider.
-4. Load students: `python seed.py students.csv` (columns `student_number,name,preferred_name,expected_location`; seed data is trusted).
+4. Load students: `python seed.py students.csv` (columns `student_number,name,preferred_name,expected_location[,last_name]`; seed data is trusted).
 
 If a Spreadsheet ID is given, the service refreshes the "Full Export" tab every minute (`EXPORT_INTERVAL_SEC`) and appends each check-in to "Live Log" (times in `TIMEZONE`, default `America/Toronto`).
