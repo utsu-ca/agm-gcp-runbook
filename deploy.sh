@@ -93,7 +93,7 @@ fi
 echo "--> Setting up service account..."
 if ! exists gcloud iam service-accounts describe "$SA_EMAIL"; then
     gcloud iam service-accounts create "$SA_NAME" --display-name="Student Checkin API SA"
-    # Add wait to see if it fixes a "account doesn't exist error
+    # eventual-consistency buffer after SA creation
     echo " Sleeping for 30s to ensure account is created... "
     sleep 30s
 fi
@@ -141,7 +141,6 @@ ensure_rule 900 "Block SQL Injection" --action deny-403 \
     --expression "evaluatePreconfiguredWaf('sqli-v422-stable', {'sensitivity': 1})"
 ensure_rule 901 "Block Cross-Site Scripting" --action deny-403 \
     --expression "evaluatePreconfiguredWaf('xss-v422-stable', {'sensitivity': 1})"
-ensure_rule 1000 "Allow office network" --action allow --src-ip-ranges "$ALLOWED_IP"
 ensure_rule 1000 "Throttle per IP" --action throttle --src-ip-ranges "$ALLOWED_IP" \
     --rate-limit-threshold-count 60 --rate-limit-threshold-interval-sec 60 \
     --conform-action allow --exceed-action deny-429 --enforce-on-key ip
@@ -157,21 +156,30 @@ create_if_missing() {  # resource kind, name, then the remaining create flags
         gcloud compute $kind create "$name" "$@" "${SCOPE[@]}"
     fi
 }
+
 SCOPE=(--global)
 create_if_missing addresses "${SERVICE_NAME}-ip" --network-tier=PREMIUM
 IP_ADDRESS="$(gcloud compute addresses describe "${SERVICE_NAME}-ip" --global --format='value(address)')"
 create_if_missing ssl-certificates "${SERVICE_NAME}-cert" --domains="$DOMAIN_NAME"
+
 SCOPE=(--region="$REGION")
 create_if_missing network-endpoint-groups "${SERVICE_NAME}-neg" \
     --network-endpoint-type=serverless --cloud-run-service="$SERVICE_NAME"
+
 SCOPE=(--global)
 create_if_missing backend-services "${SERVICE_NAME}-backend" \
-    --security-policy="$POLICY" --load-balancing-scheme=EXTERNAL_MANAGED
+    --load-balancing-scheme=EXTERNAL_MANAGED
+
+# backend-services create does not support --security-policy; attach policy via update
+gcloud compute backend-services update "${SERVICE_NAME}-backend" \
+    --global --security-policy="$POLICY"
+
 if ! gcloud compute backend-services describe "${SERVICE_NAME}-backend" --global \
         --format='value(backends[].group)' | grep -q "${SERVICE_NAME}-neg"; then
     gcloud compute backend-services add-backend "${SERVICE_NAME}-backend" --global \
         --network-endpoint-group="${SERVICE_NAME}-neg" --network-endpoint-group-region="$REGION"
 fi
+
 create_if_missing url-maps "${SERVICE_NAME}-url-map" --default-service "${SERVICE_NAME}-backend"
 create_if_missing target-https-proxies "${SERVICE_NAME}-https-proxy" \
     --url-map="${SERVICE_NAME}-url-map" --ssl-certificates="${SERVICE_NAME}-cert"
