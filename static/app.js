@@ -156,11 +156,13 @@ function parseCard(raw) {
 document.getElementById('cardInput').addEventListener('keydown', async (e) => {
     if (e.key !== 'Enter') return;
     e.preventDefault();
-    const card_id = parseCard(e.target.value);
+    const raw = e.target.value;
+    const card_id = parseCard(raw);
     e.target.value = '';
     if (!card_id) return showResult('error', '\u2717', 'Unreadable card', 'Swipe again or enter the number manually.');
-    document.getElementById('studentNum').value = '';
-    document.getElementById('lastName').value = '';
+    const parts = raw.split('^');
+    document.getElementById('studentNum').value = (parts[2] || '').trim();
+    document.getElementById('lastName').value = (parts[1] || '').trim();
     await sendRequest('is_checked_in', { card_id });
     const rows = matchesEl.querySelectorAll('.match');
     if (rows.length === 1) {
