@@ -11,6 +11,7 @@ import google.auth
 from google.auth.exceptions import GoogleAuthError
 from google.auth.transport import requests as google_requests
 from google.cloud import firestore
+from google.cloud.firestore_v1.base_query import FieldFilter
 from google.oauth2 import id_token
 from googleapiclient.discovery import build
 from fastapi import BackgroundTasks, Depends, FastAPI, Header, HTTPException
@@ -56,15 +57,15 @@ def run_full_export():
     service = sheets()
     if not service:
         return
-    values = [["Student Number", "Name", "Expected Location", "Actual Location", "Attendance Mode", "Checked In"]]
+    values = [["ID", "Student Number", "Name", "Expected Location", "Actual Location", "Attendance Mode", "Checked In"]]
     values += [
-        [doc.id, d.get("name", ""), d.get("expected_location", ""), d.get("current_location", ""),
+        [doc.id, d.get("student_number", ""), d.get("name", ""), d.get("expected_location", ""), d.get("current_location", ""),
          d.get("attendance_mode", ""), "Yes" if d.get("checked_in") else "No"]
         for doc, d in ((doc, doc.to_dict()) for doc in db.collection("students").stream())
     ]
     values = [[sanitize_cell(c) for c in row] for row in values]
     cells = service.spreadsheets().values()
-    cells.clear(spreadsheetId=SPREADSHEET_ID, range="Full Export!A:F").execute()
+    cells.clear(spreadsheetId=SPREADSHEET_ID, range="Full Export!A:G").execute()
     cells.update(spreadsheetId=SPREADSHEET_ID, range="Full Export!A1",
                  valueInputOption="RAW", body={"values": values}).execute()
 
@@ -136,13 +137,16 @@ def public_config():
 
 # --- Request Models ---
 StudentNumber = Annotated[str, Field(pattern=r"^\d+$", max_length=20)]
+LastName = Annotated[str, Field(min_length=1, max_length=60)]
+RegistrantId = Annotated[str, Field(pattern=r"^[0-9a-f]{32}$")]
 
-class StatusRequest(BaseModel):
-    student_number: StudentNumber
+class LookupRequest(BaseModel):
+    """Either field, or both, may be supplied."""
+    student_number: StudentNumber | None = None
+    last_name: LastName | None = None
 
-class CheckInRequest(StatusRequest):
-    # Must not start with a formula character
-    location: str = Field(max_length=20, pattern=r"^(?:[\w][\w\s\-\.,]*)?$")
+class CheckInRequest(BaseModel):
+    id: RegistrantId
     attendance_mode: Literal["in-person", "virtual"]
 
 # --- Live log ---
@@ -162,20 +166,37 @@ def append_to_live_log(student_number: str, location: str, mode: str, staff_emai
         log.exception("Failed to append to Google Sheet.")
 
 # --- API Endpoints ---
-@app.post("/api/is_checked_in")
-def is_checked_in(payload: StatusRequest, user: str = Depends(current_user)):
-    doc = db.collection("students").document(payload.student_number).get()
-    if not doc.exists:
-        raise HTTPException(status_code=404, detail="Student not on list.")
-    data = doc.to_dict()
-    log.info("status %s by %s", payload.student_number, user)
+def _hit(doc):
+    d = doc.to_dict()
     return {
-        "student_number": payload.student_number,
-        "checked_in": data.get("checked_in", False),
-        "name": data.get("name", ""),
-        "preferred_name": data.get("preferred_name", ""),
-        "expected_location": data.get("expected_location", ""),
+        "id": doc.id,
+        "student_number": d.get("student_number", ""),
+        "name": d.get("name", ""),
+        "preferred_name": d.get("preferred_name", ""),
+        "expected_location": d.get("expected_location", ""),
+        "checked_in": d.get("checked_in", False),
     }
+
+def find_students(student_number, last_name):
+    """Number match wins if unique; duplicates are narrowed by last name; otherwise all hits are returned."""
+    students = db.collection("students")
+    last = (last_name or "").strip().lower()
+    if student_number:
+        hits = list(students.where(filter=FieldFilter("student_number", "==", student_number)).stream())
+        if len(hits) > 1 and last:
+            hits = [h for h in hits if h.to_dict().get("last_name") == last]
+        return hits
+    return list(students.where(filter=FieldFilter("last_name", "==", last)).stream())
+
+@app.post("/api/is_checked_in")
+def is_checked_in(payload: LookupRequest, user: str = Depends(current_user)):
+    if not payload.student_number and not (payload.last_name or "").strip():
+        raise HTTPException(status_code=422, detail="Provide a student number and/or last name.")
+    hits = find_students(payload.student_number, payload.last_name)
+    if not hits:
+        raise HTTPException(status_code=404, detail="Student not on list.")
+    log.info("status lookup (%d hits) by %s", len(hits), user)
+    return {"matches": [_hit(h) for h in hits]}
 
 @firestore.transactional
 def check_in_transaction(transaction, student_ref, fields):
@@ -186,17 +207,18 @@ def check_in_transaction(transaction, student_ref, fields):
     if snapshot.to_dict().get("checked_in") is True:
         raise HTTPException(status_code=409, detail="Student already checked in.")
     transaction.update(student_ref, {"checked_in": True, **fields})
+    return snapshot.to_dict()
 
 @app.post("/api/check_in")
 def check_in(payload: CheckInRequest, background_tasks: BackgroundTasks, user: str = Depends(current_user)):
-    check_in_transaction(
+    location = payload.attendance_mode
+    data = check_in_transaction(
         db.transaction(),
-        db.collection("students").document(payload.student_number),
-        {"current_location": payload.location, "attendance_mode": payload.attendance_mode, "checked_in_by": user},
+        db.collection("students").document(payload.id),
+        {"current_location": location, "attendance_mode": payload.attendance_mode, "checked_in_by": user},
     )
-    background_tasks.add_task(append_to_live_log, payload.student_number, payload.location,
+    background_tasks.add_task(append_to_live_log, data.get("student_number", ""), location,
                               payload.attendance_mode, user)
-    return {"student_number": payload.student_number, "result": "success: checked student in"}
-
-# --- Serve Static Web App ---
-app.mount("/", StaticFiles(directory="static", html=True), name="static")
+    return {"id": payload.id, "student_number": data.get("student_number", ""),
+            "name": data.get("name", ""), "preferred_name": data.get("preferred_name", ""),
+            "result": "success: checked student in"}

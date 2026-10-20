@@ -13,34 +13,45 @@
         <div id="signin"></div>
         <p id="who" class="output"></p>
         <hr>
-        
+
+        <div class="form-group">
+            <label for="cardInput">Swipe Card (mag stripe)</label>
+            <input type="password" id="cardInput" autocomplete="off" placeholder="Click here, then swipe card">
+        </div>
+
         <div class="form-group">
             <label for="studentNum">Student Number</label>
-            <input type="text" id="studentNum">
+            <input type="text" id="studentNum" inputmode="numeric">
         </div>
-        
+
         <div class="form-group">
-            <label>Attendance Mode</label>
-            <div class="radio-group">
-                <label class="radio-label">
-                    <input type="radio" name="attendance" value="in-person" checked> In-Person
-                </label>
-                <label class="radio-label">
-                    <input type="radio" name="attendance" value="virtual"> Virtual
-                </label>
-            </div>
+            <label for="lastName">Last Name</label>
+            <input type="text" id="lastName" autocomplete="off">
         </div>
-        
+
         <div class="form-group">
-            <label for="location">Location (if in-person)</label>
-            <input type="text" id="location" placeholder="e.g. Room 101">
+            <label for="attendance">Location</label>
+            <select id="attendance">
+                <option value="in-person">In-Person</option>
+                <option value="virtual">Virtual</option>
+            </select>
         </div>
-        
+
         <div class="btn-group">
             <button id="btnStatus" class="btn-status">Check Status</button>
             <button id="btnCheckIn" class="btn-checkin">Check In</button>
         </div>
         
+        <div id="result" class="result" role="status" aria-live="polite">
+            <div id="resultIcon" class="result-icon"></div>
+            <div class="result-body">
+                <div id="resultTitle" class="result-title"></div>
+                <div id="resultDetail" class="result-detail"></div>
+            </div>
+        </div>
+
+        <div id="matches" class="matches"></div>
+
         <div id="output" class="output"></div>
     </div>
 

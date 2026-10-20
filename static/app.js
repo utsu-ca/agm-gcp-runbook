@@ -16,6 +16,7 @@ function endSession(msg) {
     idToken = null;
     sessionStart = 0;
     clearTimeout(refreshTimer);
+    document.getElementById('signin').style.display = '';
     setStatus(msg);
 }
 
@@ -36,6 +37,7 @@ window.addEventListener('load', async () => {
         callback: (resp) => {
             idToken = resp.credential;
             if (!sessionStart || Date.now() - sessionStart >= SESSION_MS) sessionStart = Date.now();
+            document.getElementById('signin').style.display = 'none';
             setStatus('Signed in (session ends ' + new Date(sessionStart + SESSION_MS).toLocaleTimeString() + ')');
             scheduleRefresh();
         }
@@ -43,8 +45,66 @@ window.addEventListener('load', async () => {
     google.accounts.id.renderButton(document.getElementById('signin'), { theme: 'outline', size: 'large' });
 });
 
+function showResult(kind, icon, title, detail) {
+    const box = document.getElementById('result');
+    box.className = 'result';
+    void box.offsetWidth; // restart animation
+    box.classList.add('visible', kind);
+    document.getElementById('resultIcon').innerText = icon;
+    document.getElementById('resultTitle').innerText = title;
+    document.getElementById('resultDetail').innerText = detail || '';
+}
+
+const matchesEl = document.getElementById('matches');
+
+function renderMatches(matches) {
+    matchesEl.replaceChildren();
+    for (const m of matches) {
+        const row = document.createElement('div');
+        row.className = 'match' + (m.checked_in ? ' done' : '');
+        const lines = [
+            ['Legal name', m.name],
+            ['Preferred name', m.preferred_name || '-'],
+            ['ID', m.id.slice(0, 8)],
+            ['Expected location', m.expected_location || '-'],
+        ];
+        for (const [k, v] of lines) {
+            const line = document.createElement('div');
+            const label = document.createElement('strong');
+            label.innerText = k + ': ';
+            line.append(label, document.createTextNode(v));
+            row.append(line);
+        }
+        const btn = document.createElement('button');
+        btn.className = 'btn-checkin';
+        btn.innerText = m.checked_in ? 'Already checked in' : 'Check in this person';
+        btn.disabled = m.checked_in;
+        btn.addEventListener('click', () => checkInById(m.id));
+        row.append(btn);
+        matchesEl.append(row);
+    }
+}
+
+function renderResult(endpoint, ok, status, data) {
+    if (!ok) {
+        const msg = typeof data.detail === 'string' ? data.detail : 'Request failed (' + status + ')';
+        const kind = status === 409 ? 'warn' : 'error';
+        return showResult(kind, status === 409 ? '!' : '\u2717', status === 404 ? 'Not on list' : msg, status === 404 ? msg : '');
+    }
+    if (endpoint === 'check_in') {
+        matchesEl.replaceChildren();
+        return showResult('success', '\u2713', 'Checked in', data.preferred_name || data.name);
+    }
+    renderMatches(data.matches);
+    if (data.matches.length > 1) return showResult('warn', '!', data.matches.length + ' matches', 'Choose the right person below.');
+    const m = data.matches[0];
+    if (m.checked_in) showResult('warn', '!', 'Already checked in', m.preferred_name || m.name);
+    else showResult('success', '\u2713', 'Valid - not yet checked in', m.preferred_name || m.name);
+}
+
 async function sendRequest(endpoint, payloadObj) {
-    if (!idToken) return show('output', 'Sign in first.');
+    if (endpoint !== 'check_in') matchesEl.replaceChildren();
+    if (!idToken) return showResult('error', '\u2717', 'Sign in first', '');
     try {
         const response = await fetch(`/api/${endpoint}`, {
             method: 'POST',
@@ -52,20 +112,44 @@ async function sendRequest(endpoint, payloadObj) {
             body: JSON.stringify(payloadObj)
         });
         if (response.status === 401) return endSession('Session expired - sign in again');
-        show('output', JSON.stringify(await response.json(), null, 2));
+        const data = await response.json().catch(() => ({}));
+        renderResult(endpoint, response.ok, response.status, data);
     } catch (err) {
-        show('output', `Error: ${err.message}`);
+        showResult('error', '\u2717', 'Error', err.message);
     }
 }
 
-const studentNumber = () => document.getElementById('studentNum').value;
+function lookup() {
+    const student_number = document.getElementById('studentNum').value.trim();
+    const last_name = document.getElementById('lastName').value.trim();
+    if (!student_number && !last_name) return showResult('error', '\u2717', 'Enter a student number and/or last name', '');
+    const body = {};
+    if (student_number) body.student_number = student_number;
+    if (last_name) body.last_name = last_name;
+    return sendRequest('is_checked_in', body);
+}
 
-document.getElementById('btnStatus').addEventListener('click', () =>
-    sendRequest('is_checked_in', { student_number: studentNumber() }));
+function checkInById(id) {
+    sendRequest('check_in', { id, attendance_mode: document.getElementById('attendance').value });
+}
 
-document.getElementById('btnCheckIn').addEventListener('click', () =>
-    sendRequest('check_in', {
-        student_number: studentNumber(),
-        location: document.getElementById('location').value,
-        attendance_mode: document.querySelector('input[name="attendance"]:checked').value
-    }));
+document.getElementById('btnStatus').addEventListener('click', lookup);
+
+// "Check In" looks up first; a single unchecked match is checked in directly via its unique ID.
+document.getElementById('btnCheckIn').addEventListener('click', async () => {
+    await lookup();
+    const rows = matchesEl.querySelectorAll('.match');
+    if (rows.length === 1) {
+        const btn = rows[0].querySelector('button');
+        if (!btn.disabled) btn.click();
+    }
+});
+
+// Card reader input: not wired to anything yet. Magstripe readers type the track
+// data then press Enter; we only capture it here.
+document.getElementById('cardInput').addEventListener('keydown', (e) => {
+    if (e.key !== 'Enter') return;
+    e.preventDefault();
+    // TODO: parse student number from swipe data and populate #studentNum
+    e.target.value = '';
+});
