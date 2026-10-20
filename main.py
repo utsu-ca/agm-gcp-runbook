@@ -225,3 +225,6 @@ def check_in(payload: CheckInRequest, background_tasks: BackgroundTasks, user: s
     return {"id": payload.id, "student_number": data.get("student_number", ""),
             "name": data.get("name", ""), "preferred_name": data.get("preferred_name", ""),
             "result": "success: checked student in"}
+
+# --- Frontend (must be mounted last so /api routes take precedence) ---
+app.mount("/", StaticFiles(directory=os.path.join(os.path.dirname(os.path.abspath(__file__)), "static"), html=True), name="static")
