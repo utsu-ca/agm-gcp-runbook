@@ -150,7 +150,7 @@ document.getElementById('btnCheckIn').addEventListener('click', async () => {
 // Only the truncated ID (digits at index -5..-2 of the student number, e.g. 0090) is matched.
 function parseCard(raw) {
     const num = (raw.split('^')[2] || '').trim();
-    return /^\d{5,}$/.test(num) ? num.slice(-5, -1) : null;
+    return /^\d{9,10}$/.test(num) ? num.slice(-5, -1) : null;
 }
 
 document.getElementById('cardInput').addEventListener('keydown', async (e) => {
