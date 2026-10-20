@@ -16,6 +16,7 @@ function endSession(msg) {
     idToken = null;
     sessionStart = 0;
     clearTimeout(refreshTimer);
+    document.getElementById('signin').style.display = '';
     setStatus(msg);
 }
 
@@ -36,6 +37,7 @@ window.addEventListener('load', async () => {
         callback: (resp) => {
             idToken = resp.credential;
             if (!sessionStart || Date.now() - sessionStart >= SESSION_MS) sessionStart = Date.now();
+            document.getElementById('signin').style.display = 'none';
             setStatus('Signed in (session ends ' + new Date(sessionStart + SESSION_MS).toLocaleTimeString() + ')');
             scheduleRefresh();
         }
@@ -43,8 +45,30 @@ window.addEventListener('load', async () => {
     google.accounts.id.renderButton(document.getElementById('signin'), { theme: 'outline', size: 'large' });
 });
 
+function showResult(kind, icon, title, detail) {
+    const box = document.getElementById('result');
+    box.className = 'result';
+    void box.offsetWidth; // restart animation
+    box.classList.add('visible', kind);
+    document.getElementById('resultIcon').innerText = icon;
+    document.getElementById('resultTitle').innerText = title;
+    document.getElementById('resultDetail').innerText = detail || '';
+}
+
+function renderResult(endpoint, ok, status, data) {
+    if (!ok) {
+        const msg = typeof data.detail === 'string' ? data.detail : 'Request failed (' + status + ')';
+        const kind = status === 409 ? 'warn' : 'error';
+        return showResult(kind, status === 409 ? '!' : '\u2717', status === 404 ? 'Not on list' : msg, status === 404 ? msg : '');
+    }
+    if (endpoint === 'check_in') return showResult('success', '\u2713', 'Checked in', data.student_number);
+    const name = data.preferred_name || data.name || data.student_number;
+    if (data.checked_in) showResult('warn', '!', 'Already checked in', name);
+    else showResult('success', '\u2713', 'Valid - not yet checked in', name + (data.expected_location ? ' (' + data.expected_location + ')' : ''));
+}
+
 async function sendRequest(endpoint, payloadObj) {
-    if (!idToken) return show('output', 'Sign in first.');
+    if (!idToken) return showResult('error', '\u2717', 'Sign in first', '');
     try {
         const response = await fetch(`/api/${endpoint}`, {
             method: 'POST',
@@ -52,9 +76,10 @@ async function sendRequest(endpoint, payloadObj) {
             body: JSON.stringify(payloadObj)
         });
         if (response.status === 401) return endSession('Session expired - sign in again');
-        show('output', JSON.stringify(await response.json(), null, 2));
+        const data = await response.json().catch(() => ({}));
+        renderResult(endpoint, response.ok, response.status, data);
     } catch (err) {
-        show('output', `Error: ${err.message}`);
+        showResult('error', '\u2717', 'Error', err.message);
     }
 }
 
@@ -69,3 +94,12 @@ document.getElementById('btnCheckIn').addEventListener('click', () =>
         location: document.getElementById('location').value,
         attendance_mode: document.querySelector('input[name="attendance"]:checked').value
     }));
+
+// Card reader input: not wired to anything yet. Magstripe readers type the track
+// data then press Enter; we only capture it here.
+document.getElementById('cardInput').addEventListener('keydown', (e) => {
+    if (e.key !== 'Enter') return;
+    e.preventDefault();
+    // TODO: parse student number from swipe data and populate #studentNum
+    e.target.value = '';
+});

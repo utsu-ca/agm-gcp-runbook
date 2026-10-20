@@ -13,7 +13,12 @@
         <div id="signin"></div>
         <p id="who" class="output"></p>
         <hr>
-        
+
+        <div class="form-group">
+            <label for="cardInput">Swipe Card (mag stripe)</label>
+            <input type="password" id="cardInput" autocomplete="off" placeholder="Click here, then swipe card">
+        </div>
+
         <div class="form-group">
             <label for="studentNum">Student Number</label>
             <input type="text" id="studentNum">
@@ -41,6 +46,14 @@
             <button id="btnCheckIn" class="btn-checkin">Check In</button>
         </div>
         
+        <div id="result" class="result" role="status" aria-live="polite">
+            <div id="resultIcon" class="result-icon"></div>
+            <div class="result-body">
+                <div id="resultTitle" class="result-title"></div>
+                <div id="resultDetail" class="result-detail"></div>
+            </div>
+        </div>
+
         <div id="output" class="output"></div>
     </div>
 
