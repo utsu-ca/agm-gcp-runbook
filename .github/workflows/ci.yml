@@ -1,0 +1,32 @@
+name: Cloud Run CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+          cache: pip
+      - run: pip install -r requirements.txt
+      - name: Syntax check
+        run: python -m compileall -q main.py seed.py
+      - name: Import app
+        run: python -c "import main"
+        env:
+          GOOGLE_CLIENT_ID: ci.apps.googleusercontent.com
+          ALLOWED_DOMAIN: example.com
+      - name: Shell check
+        run: bash -n deploy.sh
+      - name: Build container image
+        run: docker build -t student-checkin-api:ci .
