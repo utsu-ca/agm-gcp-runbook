@@ -148,20 +148,35 @@ document.getElementById('btnCheckIn').addEventListener('click', async () => {
 // Card reader input: magstripe readers type the track data then press Enter.
 // Format: %FIRST^LAST^1007600908^2021-10-27?;2176102213325201?
 // Only the truncated ID (digits at index -5..-2 of the student number, e.g. 0090) is matched.
+// Set `window.DEBUG_SWIPE = true` in the browser console to log swipe parsing.
+// Card contents are masked (digits -> #, letters -> A) so no real numbers reach the console.
+function debugSwipe(...args) {
+    if (window.DEBUG_SWIPE) console.log('[swipe]', ...args);
+}
+
+function maskCard(s) {
+    return s.replace(/\d/g, '#').replace(/[A-Za-z]/g, 'A');
+}
+
 function parseCard(raw) {
     const num = (raw.split('^')[2] || '').trim();
-    return /^\d{5,}$/.test(num) ? num.slice(-5, -1) : null;
+    const id = /^\d{5,}$/.test(num) ? num.slice(-5, -1) : null;
+    debugSwipe('raw length', raw.length, 'fields', raw.split('^').length, 'masked', maskCard(raw));
+    debugSwipe('field[2] length', num.length, 'masked', maskCard(num), id ? 'truncated_student_number found' : 'REJECTED (need 5+ digits)');
+    return id;
 }
 
 document.getElementById('cardInput').addEventListener('keydown', async (e) => {
     if (e.key !== 'Enter') return;
     e.preventDefault();
-    const card_id = parseCard(e.target.value);
+    const raw = e.target.value;
+    const truncated_student_number = parseCard(raw);
     e.target.value = '';
-    if (!card_id) return showResult('error', '\u2717', 'Unreadable card', 'Swipe again or enter the number manually.');
-    document.getElementById('studentNum').value = '';
-    document.getElementById('lastName').value = '';
-    await sendRequest('is_checked_in', { card_id });
+    if (!truncated_student_number) return showResult('error', '\u2717', 'Unreadable card', 'Swipe again or enter the number manually.');
+    const parts = raw.split('^');
+    document.getElementById('studentNum').value = (parts[2] || '').trim();
+    document.getElementById('lastName').value = (parts[1] || '').trim();
+    await sendRequest('is_checked_in', { truncated_student_number });
     const rows = matchesEl.querySelectorAll('.match');
     if (rows.length === 1) {
         const btn = rows[0].querySelector('button');

@@ -19,9 +19,11 @@ def seed_db(path):
     count = 0
     with open(path, encoding="utf-8") as f:
         for row in csv.DictReader(f):
+            student_number = (row.get("student_number") or "").strip()
+            truncated_student_number = (row.get("truncated_student_number") or "").strip() or student_number[-5:-1]
             writer.set(db.collection("students").document(uuid.uuid4().hex), {
-                "student_number": row["student_number"].strip(),
-                "card_id": row["student_number"].strip()[-5:-1],
+                "student_number": student_number,
+                "truncated_student_number": truncated_student_number,
                 "name": row["name"],
                 "last_name": last_name_of(row).lower(),
                 "preferred_name": row["preferred_name"],
