@@ -97,6 +97,14 @@ function displayName(d) {
     return pref && pref !== legal ? pref + ' (' + legal + ')' : (legal || pref || '');
 }
 
+function extractLastName(name) {
+    if (!name) return '';
+    const trimmed = name.trim();
+    if (trimmed.includes(',')) return trimmed.split(',')[0].trim();
+    const parts = trimmed.split(/\s+/);
+    return parts[parts.length - 1];
+}
+
 function renderResult(endpoint, ok, status, data) {
     if (!ok && status === 409 && data.detail && data.detail.code === 'location_mismatch') {
         return showResult('warn', '!', 'Location differs from expected', 'Expected: ' + (data.detail.expected_location || '-'));
@@ -114,6 +122,10 @@ function renderResult(endpoint, ok, status, data) {
     renderMatches(data.matches);
     if (data.matches.length > 1) return showResult('warn', '!', data.matches.length + ' matches', 'Choose the right person below.');
     const m = data.matches[0];
+    const inputLast = document.getElementById('lastName').value.trim().toLowerCase();
+    const recordLast = (m.last_name || extractLastName(m.name) || '').trim().toLowerCase();
+    const isMismatch = !!(data.last_name_mismatch || (inputLast && recordLast && inputLast !== recordLast));
+    if (isMismatch) return showResult('warn', '!', 'Likely not registered', 'Last name does not match (' + displayName(m) + ')');
     if (m.checked_in) showResult('warn', '!', 'Already checked in' + (m.current_location ? ' (' + m.current_location + ')' : ''), displayName(m));
     else showResult('success', '\u2713', 'Valid - not yet checked in', displayName(m));
 }
@@ -185,6 +197,7 @@ document.getElementById('btnStatus').addEventListener('click', lookup);
 // "Check In" looks up first; a single unchecked match is checked in directly via its unique ID.
 document.getElementById('btnCheckIn').addEventListener('click', async () => {
     await lookup();
+    if (!document.getElementById('result').classList.contains('success')) return;
     const rows = matchesEl.querySelectorAll('.match');
     if (rows.length === 1) {
         const btn = rows[0].querySelector('button');
@@ -241,6 +254,7 @@ document.getElementById('cardInput').addEventListener('keydown', async (e) => {
     document.getElementById('lastName').value = last;
     await lookup();
     if (!document.getElementById('autoCheckIn').checked) return;
+    if (!document.getElementById('result').classList.contains('success')) return;
     const rows = matchesEl.querySelectorAll('.match');
     if (rows.length === 1) {
         const btn = rows[0].querySelector('button');

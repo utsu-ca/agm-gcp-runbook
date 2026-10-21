@@ -201,12 +201,21 @@ def append_to_live_log(student_number: str, name: str, location: str, staff_emai
         log.exception("Failed to append to Google Sheet.")
 
 # --- API Endpoints ---
+def student_last_name(d) -> str:
+    if d.get("last_name"):
+        return str(d["last_name"]).strip().lower()
+    name = str(d.get("name") or "").strip()
+    if not name:
+        return ""
+    return (name.split(",")[0].strip() if "," in name else name.split()[-1]).lower()
+
 def _hit(doc):
     d = doc.to_dict()
     return {
         "id": doc.id,
         "student_number": d.get("student_number", ""),
         "name": d.get("name", ""),
+        "last_name": student_last_name(d),
         "preferred_name": d.get("preferred_name", ""),
         "expected_location": d.get("expected_location", ""),
         "checked_in": d.get("checked_in", False),
@@ -233,7 +242,14 @@ def is_checked_in(payload: LookupRequest, user: str = Depends(current_user)):
     if not hits:
         raise HTTPException(status_code=404, detail="Student not on list.")
     log.info("status lookup (%d hits) by %s", len(hits), user)
-    return {"matches": [_hit(h) for h in hits]}
+    matches = [_hit(h) for h in hits]
+    res = {"matches": matches}
+    if (payload.student_number or payload.truncated_student_number) and len(matches) == 1 and payload.last_name:
+        req_last = payload.last_name.strip().lower()
+        rec_last = (matches[0].get("last_name") or "").strip().lower()
+        if req_last and rec_last and req_last != rec_last:
+            res["last_name_mismatch"] = True
+    return res
 
 @firestore.transactional
 def check_in_transaction(transaction, student_ref, fields, acknowledged=False):
