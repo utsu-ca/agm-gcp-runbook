@@ -239,7 +239,7 @@ document.getElementById('cardInput').addEventListener('keydown', async (e) => {
     if (testMode && TEST_NAMES[truncated_student_number]) last = TEST_NAMES[truncated_student_number].last;
     document.getElementById('studentNum').value = num;
     document.getElementById('lastName').value = last;
-    await sendRequest('is_checked_in', { truncated_student_number });
+    await lookup();
     if (!document.getElementById('autoCheckIn').checked) return;
     const rows = matchesEl.querySelectorAll('.match');
     if (rows.length === 1) {
