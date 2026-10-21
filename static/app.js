@@ -3,6 +3,7 @@ const REFRESH_MS = 50 * 60 * 1000;       // Google ID tokens last 1 hour; renew 
 let idToken = null;
 let sessionStart = 0;
 let refreshTimer = null;
+let testMode = false;   // set from /api/config (TEST_MODE env var)
 
 function show(id, text) {
     const el = document.getElementById(id);
@@ -30,6 +31,7 @@ function scheduleRefresh() {
 
 window.addEventListener('load', async () => {
     const cfg = await (await fetch('/api/config')).json();
+    testMode = !!cfg.test_mode;
     google.accounts.id.initialize({
         client_id: cfg.client_id,
         hd: cfg.domain,
@@ -178,8 +180,16 @@ function maskCard(s) {
     return s.replace(/\d/g, '#').replace(/[A-Za-z]/g, 'A');
 }
 
+// Test mode only: standard bank card track 1 "%B<cardnum>^LAST/FIRST^<other data>".
+// Returns [number, last name] using the same digit rule as student cards.
+function cardFields(raw) {
+    const parts = raw.split('^');
+    if (!testMode) return [(parts[2] || '').trim(), (parts[1] || '').trim()];
+    return [(parts[0] || '').replace(/^%[A-Za-z]?/, '').replace(/\D/g, ''), (parts[1] || '').split('/')[0].trim()];
+}
+
 function parseCard(raw) {
-    const num = (raw.split('^')[2] || '').trim();
+    const num = cardFields(raw)[0];
     const id = /^\d{5,}$/.test(num) ? num.slice(-5, -1) : null;
     debugSwipe('raw length', raw.length, 'fields', raw.split('^').length, 'masked', maskCard(raw));
     debugSwipe('field[2] length', num.length, 'masked', maskCard(num), id ? 'truncated_student_number found' : 'REJECTED (need 5+ digits)');
@@ -193,9 +203,9 @@ document.getElementById('cardInput').addEventListener('keydown', async (e) => {
     const truncated_student_number = parseCard(raw);
     e.target.value = '';
     if (!truncated_student_number) return showResult('error', '\u2717', 'Unreadable card', 'Swipe again or enter the number manually.');
-    const parts = raw.split('^');
-    document.getElementById('studentNum').value = (parts[2] || '').trim();
-    document.getElementById('lastName').value = (parts[1] || '').trim();
+    const [num, last] = cardFields(raw);
+    document.getElementById('studentNum').value = num;
+    document.getElementById('lastName').value = last;
     await sendRequest('is_checked_in', { truncated_student_number });
     const rows = matchesEl.querySelectorAll('.match');
     if (rows.length === 1) {

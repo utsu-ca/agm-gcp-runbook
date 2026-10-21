@@ -30,3 +30,5 @@ Designed to be run from Google Cloud Shell in a project with billing enabled:
 If a Spreadsheet ID is given, the service refreshes the "Full Export" tab every minute (`EXPORT_INTERVAL_SEC`) and appends each check-in to "Live Log" (times in `TIMEZONE`, default `America/Toronto`).
 
 If the chosen check-in location (in-person/virtual) differs from the student's `expected_location`, the client asks staff to acknowledge the different location before checking in. Such check-ins are flagged `MISMATCH` and highlighted red in the "Full Export" (column H) and "Live Log" (column F) tabs.
+
+Set `TEST_MODE=true` (env var) to let the card reader accept standard bank cards (`%B<cardnum>^LAST/FIRST^...`) for testing; the last-4-before-check-digit rule, i.e. digits -5..-1 of the card number, is used as the truncated student number. Leave it unset in production.

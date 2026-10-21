@@ -26,6 +26,7 @@ GOOGLE_CLIENT_ID = os.environ.get("GOOGLE_CLIENT_ID", "")
 ALLOWED_DOMAIN = os.environ.get("ALLOWED_DOMAIN", "").lower()
 SPREADSHEET_ID = os.environ.get("SPREADSHEET_ID")
 TIMEZONE = ZoneInfo(os.environ.get("TIMEZONE", "America/Toronto"))
+TEST_MODE = os.environ.get("TEST_MODE", "").lower() in ("1", "true", "yes")
 EXPORT_INTERVAL_SEC = max(10, int(os.environ.get("EXPORT_INTERVAL_SEC", "60")))
 
 if not GOOGLE_CLIENT_ID or not ALLOWED_DOMAIN:
@@ -161,7 +162,7 @@ def current_user(authorization: str = Header(default="")) -> str:
 
 @app.get("/api/config")
 def public_config():
-    return {"client_id": GOOGLE_CLIENT_ID, "domain": ALLOWED_DOMAIN}
+    return {"client_id": GOOGLE_CLIENT_ID, "domain": ALLOWED_DOMAIN, "test_mode": TEST_MODE}
 
 # --- Request Models ---
 StudentNumber = Annotated[str, Field(pattern=r"^\d+$", max_length=20)]
