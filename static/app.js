@@ -157,7 +157,21 @@ function lookup() {
     const body = {};
     if (student_number) body.student_number = student_number;
     if (last_name) body.last_name = last_name;
-    return sendRequest('is_checked_in', body);
+    return lookupWithFallback(body, student_number);
+}
+
+// Try the full student number first; if not found, retry with the truncated ID derived from it.
+async function lookupWithFallback(body, student_number) {
+    const truncated = /^\d{5,}$/.test(student_number || '') ? student_number.slice(-5, -1) : null;
+    if (!truncated) return sendRequest('is_checked_in', body);
+    matchesEl.replaceChildren();
+    const first = await postRequest('is_checked_in', body);
+    if (!first) return;
+    if (first.status === 404) {
+        const { student_number: _omit, ...rest } = body;
+        return postRequest('is_checked_in', { ...rest, truncated_student_number: truncated }, true);
+    }
+    return renderResult('is_checked_in', first.ok, first.status, first.data);
 }
 
 function checkInById(id) {
@@ -224,6 +238,7 @@ document.getElementById('cardInput').addEventListener('keydown', async (e) => {
     document.getElementById('studentNum').value = num;
     document.getElementById('lastName').value = last;
     await sendRequest('is_checked_in', { truncated_student_number });
+    if (!document.getElementById('autoCheckIn').checked) return;
     const rows = matchesEl.querySelectorAll('.match');
     if (rows.length === 1) {
         const btn = rows[0].querySelector('button');
