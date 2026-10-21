@@ -74,6 +74,7 @@ function renderMatches(matches) {
             ['Expected location', m.expected_location || '-'],
             ['Record ID', m.id.slice(0, 8)],
         ];
+        if (m.checked_in) lines.splice(3, 0, ['Checked in at', m.current_location || '-']);
         for (const [k, v] of lines) {
             const line = document.createElement('div');
             const label = document.createElement('strong');
@@ -113,7 +114,7 @@ function renderResult(endpoint, ok, status, data) {
     renderMatches(data.matches);
     if (data.matches.length > 1) return showResult('warn', '!', data.matches.length + ' matches', 'Choose the right person below.');
     const m = data.matches[0];
-    if (m.checked_in) showResult('warn', '!', 'Already checked in', displayName(m));
+    if (m.checked_in) showResult('warn', '!', 'Already checked in' + (m.current_location ? ' (' + m.current_location + ')' : ''), displayName(m));
     else showResult('success', '\u2713', 'Valid - not yet checked in', displayName(m));
 }
 

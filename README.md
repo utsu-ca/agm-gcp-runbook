@@ -27,7 +27,7 @@ Designed to be run from Google Cloud Shell in a project with billing enabled:
 3. Create the A record the script prints at your DNS provider.
 4. Load students: `python seed.py students.csv` (columns `name,preferred_name,expected_location` plus `truncated_student_number` (4 digits) and/or `student_number` (truncated_student_number is derived from it if absent), optional `last_name`; seed data is trusted).
 
-If a Spreadsheet ID is given, the service refreshes the "Full Export" tab every minute (`EXPORT_INTERVAL_SEC`) and appends each check-in to "Live Log" (times in `TIMEZONE`, default `America/Toronto`).
+If a Spreadsheet ID is given, the service refreshes the "Full Export" tab every minute (`EXPORT_INTERVAL_SEC`) and appends each check-in (timestamp, student number, name, location, staff, mismatch) to "Live Log" (times in `TIMEZONE`, default `America/Toronto`).
 
 If the chosen check-in location (in-person/virtual) differs from the student's `expected_location`, the client asks staff to acknowledge the different location before checking in. Such check-ins are flagged `MISMATCH` and highlighted red in the "Full Export" (column H) and "Live Log" (column F) tabs.
 

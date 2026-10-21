@@ -185,13 +185,13 @@ def normalize_location(value) -> str:
     return "-".join(str(value or "").lower().replace("_", " ").split())
 
 # --- Live log ---
-def append_to_live_log(student_number: str, location: str, mode: str, staff_email: str, mismatch: bool = False):
+def append_to_live_log(student_number: str, name: str, location: str, staff_email: str, mismatch: bool = False):
     """Appends a single row to the 'Live Log' tab."""
     service = sheets()
     if not service:
         return
     timestamp = datetime.now(TIMEZONE).strftime("%Y-%m-%d %H:%M:%S")
-    row = [timestamp, student_number, mode, location, staff_email, "MISMATCH" if mismatch else ""]
+    row = [timestamp, student_number, name, location, staff_email, "MISMATCH" if mismatch else ""]
     try:
         service.spreadsheets().values().append(
             spreadsheetId=SPREADSHEET_ID, range="Live Log!A:F",
@@ -210,6 +210,7 @@ def _hit(doc):
         "preferred_name": d.get("preferred_name", ""),
         "expected_location": d.get("expected_location", ""),
         "checked_in": d.get("checked_in", False),
+        "current_location": d.get("current_location", "") if d.get("checked_in") else "",
     }
 
 def find_students(student_number, last_name, truncated_student_number=None):
@@ -258,11 +259,11 @@ def check_in(payload: CheckInRequest, background_tasks: BackgroundTasks, user: s
     data = check_in_transaction(
         db.transaction(),
         db.collection("students").document(payload.id),
-        {"current_location": location, "attendance_mode": payload.attendance_mode, "checked_in_by": user},
+        {"current_location": location, "attendance_mode": location, "checked_in_by": user},
         payload.acknowledge_location_mismatch,
     )
-    background_tasks.add_task(append_to_live_log, data.get("student_number", ""), location,
-                              payload.attendance_mode, user, data["location_mismatch"])
+    background_tasks.add_task(append_to_live_log, data.get("student_number", ""),
+                              data.get("name", ""), location, user, data["location_mismatch"])
     return {"id": payload.id, "student_number": data.get("student_number", ""),
             "name": data.get("name", ""), "preferred_name": data.get("preferred_name", ""),
             "location_mismatch": data["location_mismatch"], "result": "success: checked student in"}
