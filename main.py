@@ -58,20 +58,20 @@ def run_full_export():
     service = sheets()
     if not service:
         return
-    values = [["ID", "Student Number", "Name", "Expected Location", "Actual Location", "Attendance Mode", "Checked In", "Location Mismatch"]]
+    values = [["ID", "Student Number", "Name", "Expected Location", "Actual Location", "Attendance Mode", "Checked In", "Checked In By", "Location Mismatch"]]
     values += [
         [doc.id, d.get("student_number", ""), d.get("name", ""), d.get("expected_location", ""), d.get("current_location", ""),
          d.get("attendance_mode", ""), "Yes" if d.get("checked_in") else "No",
-         "MISMATCH" if d.get("location_mismatch") else ""]
+         d.get("checked_in_by", ""), "MISMATCH" if d.get("location_mismatch") else ""]
         for doc, d in ((doc, doc.to_dict()) for doc in db.collection("students").stream())
     ]
     values = [[sanitize_cell(c) for c in row] for row in values]
     cells = service.spreadsheets().values()
-    cells.clear(spreadsheetId=SPREADSHEET_ID, range="Full Export!A:H").execute()
+    cells.clear(spreadsheetId=SPREADSHEET_ID, range="Full Export!A:I").execute()
     cells.update(spreadsheetId=SPREADSHEET_ID, range="Full Export!A1",
                  valueInputOption="RAW", body={"values": values}).execute()
 
-MISMATCH_RULE_FORMULAS = {"Full Export": "=$H1=\"MISMATCH\"", "Live Log": "=$F1=\"MISMATCH\""}
+MISMATCH_RULE_FORMULAS = {"Full Export": "=$I1=\"MISMATCH\"", "Live Log": "=$F1=\"MISMATCH\""}
 
 def ensure_mismatch_highlighting():
     """Adds red conditional-format rules for location mismatches to the dashboard tabs (once per tab)."""
