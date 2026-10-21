@@ -156,7 +156,8 @@ function lookup() {
     const last_name = document.getElementById('lastName').value.trim();
     if (!student_number && !last_name) return showResult('error', '\u2717', 'Enter a student number and/or last name', '');
     const body = {};
-    if (student_number) body.student_number = student_number;
+    if (/^\d{4}$/.test(student_number)) body.truncated_student_number = student_number;
+    else if (student_number) body.student_number = student_number;
     if (last_name) body.last_name = last_name;
     return lookupWithFallback(body, student_number);
 }
