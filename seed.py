@@ -20,10 +20,10 @@ def seed_db(path):
     with open(path, encoding="utf-8") as f:
         for row in csv.DictReader(f):
             student_number = (row.get("student_number") or "").strip()
-            card_id = (row.get("card_id") or "").strip() or student_number[-5:-1]
+            truncated_student_number = (row.get("truncated_student_number") or "").strip() or student_number[-5:-1]
             writer.set(db.collection("students").document(uuid.uuid4().hex), {
                 "student_number": student_number,
-                "card_id": card_id,
+                "truncated_student_number": truncated_student_number,
                 "name": row["name"],
                 "last_name": last_name_of(row).lower(),
                 "preferred_name": row["preferred_name"],

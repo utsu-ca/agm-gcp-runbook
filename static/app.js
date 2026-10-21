@@ -162,7 +162,7 @@ function parseCard(raw) {
     const num = (raw.split('^')[2] || '').trim();
     const id = /^\d{5,}$/.test(num) ? num.slice(-5, -1) : null;
     debugSwipe('raw length', raw.length, 'fields', raw.split('^').length, 'masked', maskCard(raw));
-    debugSwipe('field[2] length', num.length, 'masked', maskCard(num), id ? 'card_id found' : 'REJECTED (need 5+ digits)');
+    debugSwipe('field[2] length', num.length, 'masked', maskCard(num), id ? 'truncated_student_number found' : 'REJECTED (need 5+ digits)');
     return id;
 }
 
@@ -170,13 +170,13 @@ document.getElementById('cardInput').addEventListener('keydown', async (e) => {
     if (e.key !== 'Enter') return;
     e.preventDefault();
     const raw = e.target.value;
-    const card_id = parseCard(raw);
+    const truncated_student_number = parseCard(raw);
     e.target.value = '';
-    if (!card_id) return showResult('error', '\u2717', 'Unreadable card', 'Swipe again or enter the number manually.');
+    if (!truncated_student_number) return showResult('error', '\u2717', 'Unreadable card', 'Swipe again or enter the number manually.');
     const parts = raw.split('^');
     document.getElementById('studentNum').value = (parts[2] || '').trim();
     document.getElementById('lastName').value = (parts[1] || '').trim();
-    await sendRequest('is_checked_in', { card_id });
+    await sendRequest('is_checked_in', { truncated_student_number });
     const rows = matchesEl.querySelectorAll('.match');
     if (rows.length === 1) {
         const btn = rows[0].querySelector('button');
