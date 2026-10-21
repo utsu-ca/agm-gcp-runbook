@@ -86,6 +86,9 @@ function renderMatches(matches) {
 }
 
 function renderResult(endpoint, ok, status, data) {
+    if (!ok && status === 409 && data.detail && data.detail.code === 'location_mismatch') {
+        return showResult('warn', '!', 'Location differs from expected', 'Expected: ' + (data.detail.expected_location || '-'));
+    }
     if (!ok) {
         const msg = typeof data.detail === 'string' ? data.detail : 'Request failed (' + status + ')';
         const kind = status === 409 ? 'warn' : 'error';
@@ -93,6 +96,7 @@ function renderResult(endpoint, ok, status, data) {
     }
     if (endpoint === 'check_in') {
         matchesEl.replaceChildren();
+        if (data.location_mismatch) return showResult('warn', '!', 'Checked in (different location)', data.preferred_name || data.name);
         return showResult('success', '\u2713', 'Checked in', data.preferred_name || data.name);
     }
     renderMatches(data.matches);
@@ -103,17 +107,33 @@ function renderResult(endpoint, ok, status, data) {
 }
 
 async function sendRequest(endpoint, payloadObj) {
+    if (endpoint === 'check_in') {
+        const first = await postRequest(endpoint, payloadObj);
+        if (first && first.status === 409 && first.data.detail && first.data.detail.code === 'location_mismatch') {
+            const ok = window.confirm('Expected location: ' + (first.data.detail.expected_location || '-') +
+                '\nChecking in as: ' + payloadObj.attendance_mode +
+                '\n\nAcknowledge different location and check in anyway?');
+            if (!ok) return renderResult(endpoint, false, 409, first.data);
+            return postRequest(endpoint, { ...payloadObj, acknowledge_location_mismatch: true }, true);
+        }
+        return first && renderResult(endpoint, first.ok, first.status, first.data);
+    }
+    return postRequest(endpoint, payloadObj, true);
+}
+
+async function postRequest(endpoint, payloadObj, render) {
     if (endpoint !== 'check_in') matchesEl.replaceChildren();
-    if (!idToken) return showResult('error', '\u2717', 'Sign in first', '');
+    if (!idToken) return void showResult('error', '\u2717', 'Sign in first', '');
     try {
         const response = await fetch(`/api/${endpoint}`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + idToken },
             body: JSON.stringify(payloadObj)
         });
-        if (response.status === 401) return endSession('Session expired - sign in again');
+        if (response.status === 401) return void endSession('Session expired - sign in again');
         const data = await response.json().catch(() => ({}));
-        renderResult(endpoint, response.ok, response.status, data);
+        if (render) renderResult(endpoint, response.ok, response.status, data);
+        return { ok: response.ok, status: response.status, data };
     } catch (err) {
         showResult('error', '\u2717', 'Error', err.message);
     }

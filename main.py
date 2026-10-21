@@ -57,20 +57,48 @@ def run_full_export():
     service = sheets()
     if not service:
         return
-    values = [["ID", "Student Number", "Name", "Expected Location", "Actual Location", "Attendance Mode", "Checked In"]]
+    values = [["ID", "Student Number", "Name", "Expected Location", "Actual Location", "Attendance Mode", "Checked In", "Location Mismatch"]]
     values += [
         [doc.id, d.get("student_number", ""), d.get("name", ""), d.get("expected_location", ""), d.get("current_location", ""),
-         d.get("attendance_mode", ""), "Yes" if d.get("checked_in") else "No"]
+         d.get("attendance_mode", ""), "Yes" if d.get("checked_in") else "No",
+         "MISMATCH" if d.get("location_mismatch") else ""]
         for doc, d in ((doc, doc.to_dict()) for doc in db.collection("students").stream())
     ]
     values = [[sanitize_cell(c) for c in row] for row in values]
     cells = service.spreadsheets().values()
-    cells.clear(spreadsheetId=SPREADSHEET_ID, range="Full Export!A:G").execute()
+    cells.clear(spreadsheetId=SPREADSHEET_ID, range="Full Export!A:H").execute()
     cells.update(spreadsheetId=SPREADSHEET_ID, range="Full Export!A1",
                  valueInputOption="RAW", body={"values": values}).execute()
 
+MISMATCH_RULE_FORMULAS = {"Full Export": "=$H1=\"MISMATCH\"", "Live Log": "=$F1=\"MISMATCH\""}
+
+def ensure_mismatch_highlighting():
+    """Adds red conditional-format rules for location mismatches to the dashboard tabs (once per tab)."""
+    service = sheets()
+    if not service:
+        return
+    meta = service.spreadsheets().get(
+        spreadsheetId=SPREADSHEET_ID, fields="sheets(properties(sheetId,title),conditionalFormats)").execute()
+    requests = []
+    for sheet in meta.get("sheets", []):
+        title = sheet["properties"]["title"]
+        if title in MISMATCH_RULE_FORMULAS and not sheet.get("conditionalFormats"):
+            requests.append({"addConditionalFormatRule": {"index": 0, "rule": {
+                "ranges": [{"sheetId": sheet["properties"]["sheetId"]}],
+                "booleanRule": {
+                    "condition": {"type": "CUSTOM_FORMULA",
+                                  "values": [{"userEnteredValue": MISMATCH_RULE_FORMULAS[title]}]},
+                    "format": {"backgroundColor": {"red": 1.0, "green": 0.8, "blue": 0.8},
+                               "textFormat": {"bold": True}}}}}})
+    if requests:
+        service.spreadsheets().batchUpdate(spreadsheetId=SPREADSHEET_ID, body={"requests": requests}).execute()
+
 async def export_loop():
     """Refreshes the delayed dashboard on a fixed interval."""
+    try:
+        await asyncio.to_thread(ensure_mismatch_highlighting)
+    except Exception:
+        log.exception("Could not set up mismatch highlighting.")
     while True:
         try:
             await asyncio.to_thread(run_full_export)
@@ -150,18 +178,22 @@ class LookupRequest(BaseModel):
 class CheckInRequest(BaseModel):
     id: RegistrantId
     attendance_mode: Literal["in-person", "virtual"]
+    acknowledge_location_mismatch: bool = False
+
+def normalize_location(value) -> str:
+    return "-".join(str(value or "").lower().replace("_", " ").split())
 
 # --- Live log ---
-def append_to_live_log(student_number: str, location: str, mode: str, staff_email: str):
+def append_to_live_log(student_number: str, location: str, mode: str, staff_email: str, mismatch: bool = False):
     """Appends a single row to the 'Live Log' tab."""
     service = sheets()
     if not service:
         return
     timestamp = datetime.now(TIMEZONE).strftime("%Y-%m-%d %H:%M:%S")
-    row = [timestamp, student_number, mode, location, staff_email]
+    row = [timestamp, student_number, mode, location, staff_email, "MISMATCH" if mismatch else ""]
     try:
         service.spreadsheets().values().append(
-            spreadsheetId=SPREADSHEET_ID, range="Live Log!A:E",
+            spreadsheetId=SPREADSHEET_ID, range="Live Log!A:F",
             valueInputOption="RAW", body={"values": [[sanitize_cell(c) for c in row]]},
         ).execute()
     except Exception:
@@ -202,15 +234,22 @@ def is_checked_in(payload: LookupRequest, user: str = Depends(current_user)):
     return {"matches": [_hit(h) for h in hits]}
 
 @firestore.transactional
-def check_in_transaction(transaction, student_ref, fields):
+def check_in_transaction(transaction, student_ref, fields, acknowledged=False):
     """Marks the student checked in atomically; raises if missing or already checked in."""
     snapshot = student_ref.get(transaction=transaction)
     if not snapshot.exists:
         raise HTTPException(status_code=404, detail="Student not on list.")
     if snapshot.to_dict().get("checked_in") is True:
         raise HTTPException(status_code=409, detail="Student already checked in.")
-    transaction.update(student_ref, {"checked_in": True, **fields})
-    return snapshot.to_dict()
+    data = snapshot.to_dict()
+    expected = normalize_location(data.get("expected_location"))
+    mismatch = bool(expected) and expected != normalize_location(fields["attendance_mode"])
+    if mismatch and not acknowledged:
+        raise HTTPException(status_code=409, detail={
+            "code": "location_mismatch", "expected_location": data.get("expected_location", ""),
+            "message": "Check-in location differs from expected location."})
+    transaction.update(student_ref, {"checked_in": True, "location_mismatch": mismatch, **fields})
+    return {**data, "location_mismatch": mismatch}
 
 @app.post("/api/check_in")
 def check_in(payload: CheckInRequest, background_tasks: BackgroundTasks, user: str = Depends(current_user)):
@@ -219,12 +258,13 @@ def check_in(payload: CheckInRequest, background_tasks: BackgroundTasks, user: s
         db.transaction(),
         db.collection("students").document(payload.id),
         {"current_location": location, "attendance_mode": payload.attendance_mode, "checked_in_by": user},
+        payload.acknowledge_location_mismatch,
     )
     background_tasks.add_task(append_to_live_log, data.get("student_number", ""), location,
-                              payload.attendance_mode, user)
+                              payload.attendance_mode, user, data["location_mismatch"])
     return {"id": payload.id, "student_number": data.get("student_number", ""),
             "name": data.get("name", ""), "preferred_name": data.get("preferred_name", ""),
-            "result": "success: checked student in"}
+            "location_mismatch": data["location_mismatch"], "result": "success: checked student in"}
 
 # --- Frontend (must be mounted last so /api routes take precedence) ---
 app.mount("/", StaticFiles(directory=os.path.join(os.path.dirname(os.path.abspath(__file__)), "static"), html=True), name="static")
