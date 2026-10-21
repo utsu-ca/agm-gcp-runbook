@@ -3,6 +3,7 @@ const REFRESH_MS = 50 * 60 * 1000;       // Google ID tokens last 1 hour; renew 
 let idToken = null;
 let sessionStart = 0;
 let refreshTimer = null;
+let testMode = false;   // set from /api/config (TEST_MODE env var)
 
 function show(id, text) {
     const el = document.getElementById(id);
@@ -30,6 +31,7 @@ function scheduleRefresh() {
 
 window.addEventListener('load', async () => {
     const cfg = await (await fetch('/api/config')).json();
+    testMode = !!cfg.test_mode;
     google.accounts.id.initialize({
         client_id: cfg.client_id,
         hd: cfg.domain,
@@ -62,11 +64,15 @@ function renderMatches(matches) {
     for (const m of matches) {
         const row = document.createElement('div');
         row.className = 'match' + (m.checked_in ? ' done' : '');
+        const heading = document.createElement('div');
+        heading.className = 'match-name';
+        heading.innerText = m.preferred_name || m.name;
+        row.append(heading);
         const lines = [
             ['Legal name', m.name],
-            ['Preferred name', m.preferred_name || '-'],
-            ['ID', m.id.slice(0, 8)],
+            ['Student #', m.student_number ? '\u2022\u2022\u2022\u2022' + m.student_number.slice(-5, -1) : '-'],
             ['Expected location', m.expected_location || '-'],
+            ['Record ID', m.id.slice(0, 8)],
         ];
         for (const [k, v] of lines) {
             const line = document.createElement('div');
@@ -85,7 +91,15 @@ function renderMatches(matches) {
     }
 }
 
+function displayName(d) {
+    const pref = d.preferred_name, legal = d.name;
+    return pref && pref !== legal ? pref + ' (' + legal + ')' : (legal || pref || '');
+}
+
 function renderResult(endpoint, ok, status, data) {
+    if (!ok && status === 409 && data.detail && data.detail.code === 'location_mismatch') {
+        return showResult('warn', '!', 'Location differs from expected', 'Expected: ' + (data.detail.expected_location || '-'));
+    }
     if (!ok) {
         const msg = typeof data.detail === 'string' ? data.detail : 'Request failed (' + status + ')';
         const kind = status === 409 ? 'warn' : 'error';
@@ -93,27 +107,44 @@ function renderResult(endpoint, ok, status, data) {
     }
     if (endpoint === 'check_in') {
         matchesEl.replaceChildren();
-        return showResult('success', '\u2713', 'Checked in', data.preferred_name || data.name);
+        if (data.location_mismatch) return showResult('warn', '!', 'Checked in (different location)', displayName(data));
+        return showResult('success', '\u2713', 'Checked in', displayName(data));
     }
     renderMatches(data.matches);
     if (data.matches.length > 1) return showResult('warn', '!', data.matches.length + ' matches', 'Choose the right person below.');
     const m = data.matches[0];
-    if (m.checked_in) showResult('warn', '!', 'Already checked in', m.preferred_name || m.name);
-    else showResult('success', '\u2713', 'Valid - not yet checked in', m.preferred_name || m.name);
+    if (m.checked_in) showResult('warn', '!', 'Already checked in', displayName(m));
+    else showResult('success', '\u2713', 'Valid - not yet checked in', displayName(m));
 }
 
 async function sendRequest(endpoint, payloadObj) {
+    if (endpoint === 'check_in') {
+        const first = await postRequest(endpoint, payloadObj);
+        if (first && first.status === 409 && first.data.detail && first.data.detail.code === 'location_mismatch') {
+            const ok = window.confirm('Expected location: ' + (first.data.detail.expected_location || '-') +
+                '\nChecking in as: ' + payloadObj.attendance_mode +
+                '\n\nAcknowledge different location and check in anyway?');
+            if (!ok) return renderResult(endpoint, false, 409, first.data);
+            return postRequest(endpoint, { ...payloadObj, acknowledge_location_mismatch: true }, true);
+        }
+        return first && renderResult(endpoint, first.ok, first.status, first.data);
+    }
+    return postRequest(endpoint, payloadObj, true);
+}
+
+async function postRequest(endpoint, payloadObj, render) {
     if (endpoint !== 'check_in') matchesEl.replaceChildren();
-    if (!idToken) return showResult('error', '\u2717', 'Sign in first', '');
+    if (!idToken) return void showResult('error', '\u2717', 'Sign in first', '');
     try {
         const response = await fetch(`/api/${endpoint}`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + idToken },
             body: JSON.stringify(payloadObj)
         });
-        if (response.status === 401) return endSession('Session expired - sign in again');
+        if (response.status === 401) return void endSession('Session expired - sign in again');
         const data = await response.json().catch(() => ({}));
-        renderResult(endpoint, response.ok, response.status, data);
+        if (render) renderResult(endpoint, response.ok, response.status, data);
+        return { ok: response.ok, status: response.status, data };
     } catch (err) {
         showResult('error', '\u2717', 'Error', err.message);
     }
@@ -158,8 +189,23 @@ function maskCard(s) {
     return s.replace(/\d/g, '#').replace(/[A-Za-z]/g, 'A');
 }
 
+// Test mode only: standard bank card track 1 "%B<cardnum>^LAST/FIRST^<other data>".
+// Returns [number, last name] using the same digit rule as student cards.
+function cardFields(raw) {
+    const parts = raw.split('^');
+    if (!testMode) return [(parts[2] || '').trim(), (parts[1] || '').trim()];
+    return [(parts[0] || '').replace(/^%[A-Za-z]?/, '').replace(/\D/g, ''), (parts[1] || '').split('/')[0].trim()];
+}
+
+// Test mode only: fake the name for known truncated IDs, since only bank cards are available.
+const TEST_NAMES = {
+    '0723': { first: 'Zander', last: 'Hawley' },
+    '2498': { first: 'Xie', last: 'Lang' },
+    '3881': { first: 'Jared', last: 'McLaughlin' },
+};
+
 function parseCard(raw) {
-    const num = (raw.split('^')[2] || '').trim();
+    const num = cardFields(raw)[0];
     const id = /^\d{5,}$/.test(num) ? num.slice(-5, -1) : null;
     debugSwipe('raw length', raw.length, 'fields', raw.split('^').length, 'masked', maskCard(raw));
     debugSwipe('field[2] length', num.length, 'masked', maskCard(num), id ? 'truncated_student_number found' : 'REJECTED (need 5+ digits)');
@@ -173,9 +219,10 @@ document.getElementById('cardInput').addEventListener('keydown', async (e) => {
     const truncated_student_number = parseCard(raw);
     e.target.value = '';
     if (!truncated_student_number) return showResult('error', '\u2717', 'Unreadable card', 'Swipe again or enter the number manually.');
-    const parts = raw.split('^');
-    document.getElementById('studentNum').value = (parts[2] || '').trim();
-    document.getElementById('lastName').value = (parts[1] || '').trim();
+    let [num, last] = cardFields(raw);
+    if (testMode && TEST_NAMES[truncated_student_number]) last = TEST_NAMES[truncated_student_number].last;
+    document.getElementById('studentNum').value = num;
+    document.getElementById('lastName').value = last;
     await sendRequest('is_checked_in', { truncated_student_number });
     const rows = matchesEl.querySelectorAll('.match');
     if (rows.length === 1) {
