@@ -27,7 +27,12 @@ Designed to be run from Google Cloud Shell in a project with billing enabled:
 3. Create the A record the script prints at your DNS provider.
 4. Load students: `python seed.py students.csv` (columns `name,preferred_name,expected_location` plus `truncated_student_number` (4 digits) and/or `student_number` (truncated_student_number is derived from it if absent), optional `last_name`; seed data is trusted).
 
-If a Spreadsheet ID is given, the service refreshes the "Full Export" tab every minute (`EXPORT_INTERVAL_SEC`) and appends each check-in (timestamp, student number, name, location, staff, mismatch) to "Live Log" (times in `TIMEZONE`, default `America/Toronto`).
+If a Spreadsheet ID is given, a Cloud Scheduler-triggered Cloud Run Job refreshes the "Full Export" tab (default every 5 minutes, 08:00-18:55 Mon-Fri; override with `EXPORT_SCHEDULE`/`EXPORT_TZ`) and the service appends each check-in (timestamp, student number, name, location, staff, mismatch) to "Live Log" (times in `TIMEZONE`, default `America/Toronto`).
+
+## Cost control
+- The service scales to zero (`--min-instances=0`, `--max-instances` default 3, override with `MAX_INSTANCES`); nothing runs between requests or export runs.
+- Old container images are pruned (newest 3 kept) and load balancer logging is sampled at 10%.
+- The load balancer, Cloud Armor and static IP are fixed costs that do not sleep. For off-season, run `./teardown.sh` (keeps Firestore data and the static IP; `DELETE_STATIC_IP=1` also releases the IP) and `./deploy.sh` to restore.
 
 If the chosen check-in location (in-person/virtual) differs from the student's `expected_location`, the client asks staff to acknowledge the different location before checking in. Such check-ins are flagged `MISMATCH` and highlighted red in the "Full Export" (column I) and "Live Log" (column F) tabs.
 

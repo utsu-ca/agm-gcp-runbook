@@ -112,15 +112,56 @@ DEPLOY_ARGS=(
     --service-account="$SA_EMAIL"
     --quiet
 )
-if [ -n "$SPREADSHEET_ID" ]; then
-    ENV_VARS="$ENV_VARS|SPREADSHEET_ID=$SPREADSHEET_ID"
-    # The dashboard export runs inside the service every minute, so keep one instance running.
-    DEPLOY_ARGS+=(--min-instances=1 --max-instances=1 --no-cpu-throttling)
-else
-    DEPLOY_ARGS+=(--min-instances=0)
-fi
+# Scale to zero: the service only runs while handling requests. The dashboard export is a
+# scheduled Cloud Run Job (below), so nothing needs an always-on instance.
+[ -n "$SPREADSHEET_ID" ] && ENV_VARS="$ENV_VARS|SPREADSHEET_ID=$SPREADSHEET_ID"
+DEPLOY_ARGS+=(--min-instances=0 --max-instances="${MAX_INSTANCES:-3}" --cpu=1 --memory=512Mi --cpu-boost)
 DEPLOY_ARGS+=(--set-env-vars="$ENV_VARS")
 gcloud run deploy "$SERVICE_NAME" "${DEPLOY_ARGS[@]}"
+
+# Keep only the newest images built by --source deploys (cheaper Artifact Registry storage).
+AR_REPO="cloud-run-source-deploy"
+if exists gcloud artifacts repositories describe "$AR_REPO" --location="$REGION"; then
+    POLICY_FILE="$(mktemp)"
+    cat >"$POLICY_FILE" <<JSON
+[{"name":"keep-recent","action":{"type":"Keep"},"mostRecentVersions":{"keepCount":3}},
+ {"name":"delete-old","action":{"type":"Delete"},"condition":{"tagState":"any"}}]
+JSON
+    gcloud artifacts repositories set-cleanup-policies "$AR_REPO" --location="$REGION" \
+        --policy="$POLICY_FILE" --no-dry-run --quiet || echo "  (could not set cleanup policy; continuing)"
+    rm -f "$POLICY_FILE"
+fi
+
+# --- 4b. Scheduled dashboard export (Cloud Run Job + Cloud Scheduler) --------
+JOB_NAME="${SERVICE_NAME}-export"
+SCHEDULER_NAME="${JOB_NAME}-schedule"
+EXPORT_SCHEDULE="${EXPORT_SCHEDULE:-*/5 8-18 * * 1-5}"   # every 5 min, 08:00-18:55 Mon-Fri
+EXPORT_TZ="${EXPORT_TZ:-America/Toronto}"
+if [ -n "$SPREADSHEET_ID" ]; then
+    echo "--> Setting up scheduled dashboard export ($EXPORT_SCHEDULE $EXPORT_TZ)..."
+    gcloud services enable cloudscheduler.googleapis.com
+    IMAGE="$(gcloud run services describe "$SERVICE_NAME" --region="$REGION" \
+        --format='value(spec.template.spec.containers[0].image)')"
+    gcloud run jobs deploy "$JOB_NAME" --region="$REGION" --image="$IMAGE" \
+        --service-account="$SA_EMAIL" --command=python --args=export_job.py \
+        --set-env-vars="$ENV_VARS" --max-retries=1 --task-timeout=300s --quiet
+    gcloud run jobs add-iam-policy-binding "$JOB_NAME" --region="$REGION" \
+        --member="serviceAccount:$SA_EMAIL" --role="roles/run.invoker" --quiet >/dev/null
+    JOB_URI="https://run.googleapis.com/v2/projects/${PROJECT_ID}/locations/${REGION}/jobs/${JOB_NAME}:run"
+    SCHED_ARGS=(--location="$REGION" --schedule="$EXPORT_SCHEDULE" --time-zone="$EXPORT_TZ"
+        --uri="$JOB_URI" --http-method=POST --oauth-service-account-email="$SA_EMAIL")
+    if exists gcloud scheduler jobs describe "$SCHEDULER_NAME" --location="$REGION"; then
+        gcloud scheduler jobs update http "$SCHEDULER_NAME" "${SCHED_ARGS[@]}"
+    else
+        gcloud scheduler jobs create http "$SCHEDULER_NAME" "${SCHED_ARGS[@]}"
+    fi
+else
+    # Spreadsheet removed on a re-run: stop paying for the export.
+    exists gcloud scheduler jobs describe "$SCHEDULER_NAME" --location="$REGION" && \
+        gcloud scheduler jobs delete "$SCHEDULER_NAME" --location="$REGION" --quiet
+    exists gcloud run jobs describe "$JOB_NAME" --region="$REGION" && \
+        gcloud run jobs delete "$JOB_NAME" --region="$REGION" --quiet
+fi
 
 # --- 5. Cloud Armor ---------------------------------------------------------
 echo "--> Configuring Cloud Armor policy & WAF..."
@@ -173,7 +214,7 @@ create_if_missing backend-services "${SERVICE_NAME}-backend" \
 
 # backend-services create does not support --security-policy; attach policy via update
 gcloud compute backend-services update "${SERVICE_NAME}-backend" \
-    --global --security-policy="$POLICY"
+    --global --security-policy="$POLICY" --enable-logging --logging-sample-rate=0.1
 
 if ! gcloud compute backend-services describe "${SERVICE_NAME}-backend" --global \
         --format='value(backends[].group)' | grep -q "${SERVICE_NAME}-neg"; then

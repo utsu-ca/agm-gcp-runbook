@@ -1,8 +1,6 @@
-import asyncio
 import functools
 import logging
 import os
-from contextlib import asynccontextmanager
 from datetime import datetime
 from typing import Annotated, Literal
 from zoneinfo import ZoneInfo
@@ -14,7 +12,7 @@ from google.cloud import firestore
 from google.cloud.firestore_v1.base_query import FieldFilter
 from google.oauth2 import id_token
 from googleapiclient.discovery import build
-from fastapi import BackgroundTasks, Depends, FastAPI, Header, HTTPException
+from fastapi import Depends, FastAPI, Header, HTTPException
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
@@ -27,7 +25,6 @@ ALLOWED_DOMAIN = os.environ.get("ALLOWED_DOMAIN", "").lower()
 SPREADSHEET_ID = os.environ.get("SPREADSHEET_ID")
 TIMEZONE = ZoneInfo(os.environ.get("TIMEZONE", "America/Toronto"))
 TEST_MODE = os.environ.get("TEST_MODE", "").lower() in ("1", "true", "yes")
-EXPORT_INTERVAL_SEC = max(10, int(os.environ.get("EXPORT_INTERVAL_SEC", "60")))
 
 if not GOOGLE_CLIENT_ID or not ALLOWED_DOMAIN:
     raise RuntimeError("GOOGLE_CLIENT_ID and ALLOWED_DOMAIN environment variables are required.")
@@ -94,27 +91,7 @@ def ensure_mismatch_highlighting():
     if requests:
         service.spreadsheets().batchUpdate(spreadsheetId=SPREADSHEET_ID, body={"requests": requests}).execute()
 
-async def export_loop():
-    """Refreshes the delayed dashboard on a fixed interval."""
-    try:
-        await asyncio.to_thread(ensure_mismatch_highlighting)
-    except Exception:
-        log.exception("Could not set up mismatch highlighting.")
-    while True:
-        try:
-            await asyncio.to_thread(run_full_export)
-        except Exception:
-            log.exception("Full export failed.")
-        await asyncio.sleep(EXPORT_INTERVAL_SEC)
-
-@asynccontextmanager
-async def lifespan(_app):
-    task = asyncio.create_task(export_loop()) if sheets() else None
-    yield
-    if task:
-        task.cancel()
-
-app = FastAPI(title="Student Check-in API", docs_url=None, redoc_url=None, openapi_url=None, lifespan=lifespan)
+app = FastAPI(title="Student Check-in API", docs_url=None, redoc_url=None, openapi_url=None)
 
 SECURITY_HEADERS = {
     "X-Content-Type-Options": "nosniff",
@@ -254,7 +231,7 @@ def check_in_transaction(transaction, student_ref, fields, acknowledged=False):
     return {**data, "location_mismatch": mismatch}
 
 @app.post("/api/check_in")
-def check_in(payload: CheckInRequest, background_tasks: BackgroundTasks, user: str = Depends(current_user)):
+def check_in(payload: CheckInRequest, user: str = Depends(current_user)):
     location = payload.attendance_mode
     data = check_in_transaction(
         db.transaction(),
@@ -262,8 +239,8 @@ def check_in(payload: CheckInRequest, background_tasks: BackgroundTasks, user: s
         {"current_location": location, "attendance_mode": location, "checked_in_by": user},
         payload.acknowledge_location_mismatch,
     )
-    background_tasks.add_task(append_to_live_log, data.get("student_number", ""),
-                              data.get("name", ""), location, user, data["location_mismatch"])
+    # Inline, not a background task: Cloud Run throttles CPU after the response is sent.
+    append_to_live_log(data.get("student_number", ""), data.get("name", ""), location, user, data["location_mismatch"])
     return {"id": payload.id, "student_number": data.get("student_number", ""),
             "name": data.get("name", ""), "preferred_name": data.get("preferred_name", ""),
             "location_mismatch": data["location_mismatch"], "result": "success: checked student in"}
